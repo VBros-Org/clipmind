@@ -98,6 +98,8 @@ Because we auto-burn the subtitles, we own how they look, so the creator must be
 
 Headless, called server-side via the Builder API.
 
+**Rule: one Mind per creator, product logic stays in the backend.** Each creator gets their own Mind (their voice and taste), created programmatically at onboarding (T4), never one shared brain. The product logic (how to write a caption, the SEO rules, the ranking method, the ClipMind workflow) lives in the backend prompts, versioned in this repo, not typed into any Mind as Tenets. Tenets hold only the creator's voice and taste. This keeps the product logic identical across every creator's Mind and under backend control.
+
 - **Tenets (persistent memory):** voice profile (sentence structure, phrasing, hooks) + clip-taste profile (what this creator clips) + guardrails. Built from the corpus, updated by accept/reject.
 - **Caption generation:** writes the post-copy in the creator's voice, then applies a per-platform SEO layer (YouTube, TikTok, Instagram: keyword and hook conventions, length norms, hashtags). Reuse the anti-slop and platform-safety rules from streamer-pipeline.
 - **Clip ranking:** reads candidate transcript spans, ranks by corpus taste, returns the picks. Judgment, human-reviewed in step 3, so variance is safe.

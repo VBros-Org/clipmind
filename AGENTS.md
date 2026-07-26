@@ -13,6 +13,7 @@ This file is self-contained. It does not depend on any one person's local setup.
 - Reliability-critical control flow (sequencing, dedup, rotation, retries, scheduling execution, push delivery, state) lives in **deterministic code**, never in the Mind.
 - The Mind is called server-side only for: (1) holding a creator's voice + clip taste (Tenets), (2) writing post captions in that voice with SEO, (3) ranking candidate clip moments.
 - The Mind never owns control flow and never faces the user directly.
+- **One Mind per creator**, created at onboarding, never one shared brain. Product logic (captioning method, SEO rules, ranking approach) lives in backend prompts in this repo, not typed into a Mind. A Mind's Tenets hold only that creator's voice and taste.
 - If you catch yourself asking the Mind to enforce a hard rule ("never post the same clip twice"), stop: that belongs in the database and the state machine.
 
 ## 1. Stack (do not introduce new languages or frameworks without team sign-off)
