@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Build plan
+    url: https://github.com/VBros-Org/clipmind/blob/main/docs/build-plan.md
+    about: Read the full design and architecture before opening a ticket.
