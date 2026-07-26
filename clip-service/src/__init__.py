@@ -1,0 +1,1 @@
+"""ClipMind clip service package."""
