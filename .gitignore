@@ -1,0 +1,23 @@
+# Node / Next
+node_modules/
+.next/
+dist/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Env / secrets (never commit)
+.env
+.env.local
+*.local
+
+# Prisma local db
+*.db
+
+# OS
+.DS_Store
+Thumbs.db

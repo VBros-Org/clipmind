@@ -1,0 +1,73 @@
+// ClipMind data model. Owned by the TypeScript backend (the only DB owner).
+// See docs/build-plan.md section 11. State machine lives on Clip.status.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Creator {
+  id           String    @id @default(cuid())
+  channelUrl   String?
+  mindId       String? // the creator's Minds agent (voice + clip-taste Tenets)
+  captionStyle Json? // burned-in subtitle preset: font, size, position, colour, highlight
+  createdAt    DateTime  @default(now())
+  videos       Video[]
+  clips        Clip[]
+  schedule     Schedule?
+}
+
+model Video {
+  id        String   @id @default(cuid())
+  creatorId String
+  creator   Creator  @relation(fields: [creatorId], references: [id])
+  sourceUrl String?
+  status    String   @default("uploaded") // uploaded | transcribed | clipped
+  createdAt DateTime @default(now())
+  clips     Clip[]
+}
+
+enum ClipStatus {
+  candidate
+  accepted
+  rejected
+  scheduled
+  posted
+}
+
+model Clip {
+  id          String     @id @default(cuid())
+  videoId     String
+  video       Video      @relation(fields: [videoId], references: [id])
+  creatorId   String
+  creator     Creator    @relation(fields: [creatorId], references: [id])
+  startMs     Int
+  endMs       Int
+  trimStartMs Int? // in-app top/tail trim
+  trimEndMs   Int?
+  renderedUrl String? // clip with baked-in subtitles
+  postCopy    String? // platform caption (voice + SEO), written by the Mind
+  status      ClipStatus @default(candidate)
+  createdAt   DateTime   @default(now())
+}
+
+model Schedule {
+  id        String   @id @default(cuid())
+  creatorId String   @unique
+  creator   Creator  @relation(fields: [creatorId], references: [id])
+  slots     Json // post times
+  rotation  Json // deterministic rotation state (least-recently-served)
+  updatedAt DateTime @updatedAt
+}
+
+model LearningEvent {
+  id        String   @id @default(cuid())
+  clipId    String
+  creatorId String
+  action    String // accept | reject (feeds the Mind's taste)
+  createdAt DateTime @default(now())
+}
