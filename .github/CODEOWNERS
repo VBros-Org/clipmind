@@ -1,0 +1,9 @@
+# Default owner until the work split is decided.
+* @SinkAttempt
+
+# Component owners (fill in after George, Mos, and Felix pick lanes):
+# /clip-service/  @<python-owner>
+# /app/           @<ts-owner>
+# Minds work is reviewed by the Mind owner.
+#
+# Members: @SinkAttempt (George), @MostafetoG3 (Mos), Felix (handle TBD).
