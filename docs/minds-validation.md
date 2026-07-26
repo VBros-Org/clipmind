@@ -14,7 +14,14 @@ Running findings from the T0 spike on the `gitmgg` dev Mind. Purpose: confirm th
 - Live memory taxonomy observed: **Covenants** (the Tenets/rules), **invariants**, **lessons**, **apiKeys**. This differs from the docs' "Tenets = Invariants + Priors" wording. Note the dedicated **`apiKeys`** bucket, likely where our clip-service token would be stored.
 - Cost: a few credits per exchange; 201 covers many T0 messages.
 
-## Finding 2: HTTP_Execute + token storage (Test 2) — PENDING
+## Finding 2: HTTP_Execute works, GET and JSON POST (Test 2 PASS)
+- **GET** `https://api.github.com/zen` returned a real quote ("Approachable is better than simple"). Outbound GET confirmed. No manual Bazaar equip was needed, the Mind ran it directly.
+- **POST** `https://httpbin.org/post` with body `{"video":"test","creator":"gitmgg"}` came back echoed under `"json": {"creator":"gitmgg","video":"test"}` with `Content-Type: application/json`. This proves the Mind sends real structured JSON POST bodies, exactly the shape our clip service expects (`POST /candidates`, `POST /cut`). Confirmed.
+- **Not yet tested:** token/auth header storage (both test endpoints were public). Confirm when we first point `HTTP_Execute` at our token-gated clip service, using the `apiKeys` / Connections mechanism.
 
-## Implication so far
-Persistent, structured memory (the product's core) is real. Proceed. Still to validate: outbound `HTTP_Execute` and how it stores a token.
+## T0 verdict: PASS — green light to build
+All load-bearing assumptions held:
+1. Persistent, structured, cross-thread memory works (Tenets / Covenants).
+2. The Mind can call external HTTP endpoints (GET and JSON POST).
+
+The architecture stands: a deterministic backend drives a headless Mind, the Mind holds voice as Tenets and reaches our services via `HTTP_Execute`. One minor item remains for later, token-auth storage, validated when the real clip service is wired. Proceed to T1 (clip service) and T3 (app/DB).
