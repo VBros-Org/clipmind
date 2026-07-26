@@ -11,6 +11,6 @@
     "incremental": false,
     "types": ["node"]
   },
-  "include": ["scripts/**/*.ts", "lib/**/*.ts"],
+  "include": ["scripts/**/*.ts", "lib/**/*.ts", "tests/**/*.ts"],
   "exclude": ["node_modules"]
 }

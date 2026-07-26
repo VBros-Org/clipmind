@@ -25,7 +25,7 @@ from .config import get_settings
 from .presets import CaptionPreset, get_caption_preset, validate_caption_presets
 from .render import cut_segment_for_transcription, render_cut_with_subtitles
 from .subtitles import transcript_for_cut, transcript_from_payload
-from .transcribe import probe_video_duration_ms, transcribe_video
+from .transcribe import Transcript, probe_video_duration_ms, transcribe_video
 
 MAX_DOWNLOAD_BYTES = 1_000_000_000
 
@@ -99,6 +99,27 @@ async def candidates(
         "duration_ms": duration_ms,
         "candidates": [window.to_response() for window in candidate_windows],
     }
+
+
+@app.post("/transcribe")
+async def transcribe(
+    request: Request,
+    _: None = Depends(_require_service_token),
+) -> dict[str, object]:
+    settings = get_settings()
+
+    with tempfile.TemporaryDirectory(prefix="clipmind-transcribe-") as raw_temp_dir:
+        temp_dir = Path(raw_temp_dir)
+        video_path = await _materialize_video_input(request, temp_dir)
+        duration_ms = probe_video_duration_ms(video_path)
+        transcript = transcribe_video(
+            video_path,
+            settings.openai_api_key,
+            temp_dir,
+            duration_ms,
+        )
+
+    return _transcript_to_response(transcript)
 
 
 @app.post("/cut")
@@ -213,6 +234,28 @@ async def _save_upload_file(upload: UploadFile, temp_dir: Path, stem: str) -> Pa
     await upload.close()
 
     return video_path
+
+
+def _transcript_to_response(transcript: Transcript) -> dict[str, object]:
+    return {
+        "text": transcript.text,
+        "segments": [
+            {
+                "start_ms": segment.start_ms,
+                "end_ms": segment.end_ms,
+                "text": segment.text,
+            }
+            for segment in transcript.segments
+        ],
+        "words": [
+            {
+                "start_ms": word.start_ms,
+                "end_ms": word.end_ms,
+                "word": word.word,
+            }
+            for word in transcript.words
+        ],
+    }
 
 
 async def _parse_cut_request(request: Request, temp_dir: Path) -> CutRequest:
