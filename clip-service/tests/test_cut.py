@@ -1,0 +1,113 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from src import main
+from src.config import reset_settings_cache
+from src.transcribe import Transcript
+
+AUTH_HEADERS = {"Authorization": "Bearer test-service-token"}
+
+
+def test_cut_rejects_missing_or_wrong_token() -> None:
+    reset_settings_cache()
+    client = TestClient(main.app)
+
+    missing = client.post(
+        "/cut",
+        data={"start_ms": "0", "end_ms": "1000", "preset_id": "clean-bold"},
+        files={"file": ("sample.mp4", b"fake video", "video/mp4")},
+    )
+    wrong = client.post(
+        "/cut",
+        headers={"Authorization": "Bearer wrong-token"},
+        data={"start_ms": "0", "end_ms": "1000", "preset_id": "clean-bold"},
+        files={"file": ("sample.mp4", b"fake video", "video/mp4")},
+    )
+
+    assert missing.status_code == 401
+    assert wrong.status_code == 401
+
+
+def test_cut_rejects_bad_window() -> None:
+    reset_settings_cache()
+    client = TestClient(main.app)
+
+    response = client.post(
+        "/cut",
+        headers=AUTH_HEADERS,
+        data={"start_ms": "1000", "end_ms": "1000", "preset_id": "clean-bold"},
+        files={"file": ("sample.mp4", b"fake video", "video/mp4")},
+    )
+
+    assert response.status_code == 422
+
+
+def test_cut_rejects_bad_preset() -> None:
+    reset_settings_cache()
+    client = TestClient(main.app)
+
+    response = client.post(
+        "/cut",
+        headers=AUTH_HEADERS,
+        data={"start_ms": "0", "end_ms": "1000", "preset_id": "unknown"},
+        files={"file": ("sample.mp4", b"fake video", "video/mp4")},
+    )
+
+    assert response.status_code == 422
+
+
+def test_cut_returns_mp4_with_supplied_transcript_without_transcribing(
+    monkeypatch,
+) -> None:
+    reset_settings_cache()
+
+    def fail_transcribe(*args: object, **kwargs: object) -> Transcript:
+        raise AssertionError("transcribe_video should not run when transcript is supplied.")
+
+    def fake_render(
+        source_path: Path,
+        output_path: Path,
+        transcript: Transcript,
+        preset: object,
+        start_ms: int,
+        duration_ms: int,
+        work_dir: Path,
+    ) -> None:
+        output_path.write_bytes(b"fake mp4")
+
+    monkeypatch.setattr(main, "probe_video_duration_ms", lambda video_path: 50_000)
+    monkeypatch.setattr(main, "transcribe_video", fail_transcribe)
+    monkeypatch.setattr(main, "render_cut_with_subtitles", fake_render)
+
+    client = TestClient(main.app)
+    response = client.post(
+        "/cut",
+        headers=AUTH_HEADERS,
+        data={
+            "start_ms": "5000",
+            "end_ms": "35000",
+            "preset_id": "clean-bold",
+            "transcript": json.dumps(
+                {
+                    "text": "Wait this is the moment",
+                    "segments": [
+                        {
+                            "start_ms": 5000,
+                            "end_ms": 9000,
+                            "text": "Wait this is the moment",
+                        }
+                    ],
+                }
+            ),
+        },
+        files={"file": ("sample.mp4", b"fake video", "video/mp4")},
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"fake mp4"
+    assert response.headers["x-clipmind-duration-ms"] == "30000"
+    assert response.headers["x-clipmind-preset-id"] == "clean-bold"
