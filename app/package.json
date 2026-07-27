@@ -12,7 +12,10 @@
     "preonboard:creator": "prisma generate",
     "onboard:creator": "tsc -p tsconfig.scripts.json && node --env-file=.env dist/scripts/onboard-creator.js",
     "pretest:onboarding": "prisma generate",
-    "test:onboarding": "tsc -p tsconfig.scripts.json && node --test dist/tests/*.test.js",
+    "test:onboarding": "tsc -p tsconfig.scripts.json && node --test dist/tests/clip-service.test.js dist/tests/minds.test.js dist/tests/onboarding.test.js dist/tests/voice-distill.test.js",
+    "preingest:video": "prisma generate",
+    "ingest:video": "tsc -p tsconfig.scripts.json && node --env-file=.env dist/scripts/ingest-video.js",
+    "test:ingest": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env dist/tests/ingest.test.js",
     "preverify:creator": "prisma generate",
     "verify:creator": "tsc -p tsconfig.scripts.json && node --env-file=.env dist/scripts/verify-creator.js"
   },

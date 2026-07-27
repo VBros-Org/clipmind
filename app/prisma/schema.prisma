@@ -27,6 +27,7 @@ model Video {
   creatorId String
   creator   Creator  @relation(fields: [creatorId], references: [id])
   sourceUrl String?
+  contentKey String? @unique
   status    String   @default("uploaded") // uploaded | transcribed | clipped
   createdAt DateTime @default(now())
   clips     Clip[]
@@ -52,6 +53,8 @@ model Clip {
   trimEndMs   Int?
   renderedUrl String? // clip with baked-in subtitles
   postCopy    String? // platform caption (voice + SEO), written by the Mind
+  transcript  String?
+  reasons     Json?
   status      ClipStatus @default(candidate)
   createdAt   DateTime   @default(now())
 }
