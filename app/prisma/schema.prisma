@@ -11,26 +11,26 @@ datasource db {
 }
 
 model Creator {
-  id           String    @id @default(cuid())
-  channelUrl   String?
-  mindId       String? // the creator's Minds agent (voice + clip-taste Tenets)
+  id            String    @id @default(cuid())
+  channelUrl    String?
+  mindId        String? // the creator's Minds agent (voice + clip-taste Tenets)
   initialTenets Json? // distilled creator voice + clip-taste Tenets from onboarding
-  captionStyle Json? // burned-in subtitle preset: font, size, position, colour, highlight
-  createdAt    DateTime  @default(now())
-  videos       Video[]
-  clips        Clip[]
-  schedule     Schedule?
+  captionStyle  Json? // burned-in subtitle preset: font, size, position, colour, highlight
+  createdAt     DateTime  @default(now())
+  videos        Video[]
+  clips         Clip[]
+  schedule      Schedule?
 }
 
 model Video {
-  id        String   @id @default(cuid())
-  creatorId String
-  creator   Creator  @relation(fields: [creatorId], references: [id])
-  sourceUrl String?
-  contentKey String? @unique
-  status    String   @default("uploaded") // uploaded | transcribed | clipped
-  createdAt DateTime @default(now())
-  clips     Clip[]
+  id         String   @id @default(cuid())
+  creatorId  String
+  creator    Creator  @relation(fields: [creatorId], references: [id])
+  sourceUrl  String?
+  contentKey String?  @unique
+  status     String   @default("uploaded") // uploaded | transcribed | clipped
+  createdAt  DateTime @default(now())
+  clips      Clip[]
 }
 
 enum ClipStatus {
@@ -42,30 +42,34 @@ enum ClipStatus {
 }
 
 model Clip {
-  id          String     @id @default(cuid())
-  videoId     String
-  video       Video      @relation(fields: [videoId], references: [id])
-  creatorId   String
-  creator     Creator    @relation(fields: [creatorId], references: [id])
-  startMs     Int
-  endMs       Int
-  trimStartMs Int? // in-app top/tail trim
-  trimEndMs   Int?
-  renderedUrl String? // clip with baked-in subtitles
-  postCopy    String? // platform caption (voice + SEO), written by the Mind
-  transcript  String?
-  reasons     Json?
-  status      ClipStatus @default(candidate)
-  createdAt   DateTime   @default(now())
+  id           String     @id @default(cuid())
+  videoId      String
+  video        Video      @relation(fields: [videoId], references: [id])
+  creatorId    String
+  creator      Creator    @relation(fields: [creatorId], references: [id])
+  startMs      Int
+  endMs        Int
+  trimStartMs  Int? // in-app top/tail trim
+  trimEndMs    Int?
+  renderedUrl  String? // clip with baked-in subtitles
+  postCopy     String? // platform caption (voice + SEO), written by the Mind
+  transcript   String?
+  reasons      Json?
+  status       ClipStatus @default(candidate)
+  scheduledFor DateTime?
+  postedAt     DateTime?
+  createdAt    DateTime   @default(now())
 }
 
 model Schedule {
-  id        String   @id @default(cuid())
-  creatorId String   @unique
-  creator   Creator  @relation(fields: [creatorId], references: [id])
-  slots     Json // post times
-  rotation  Json // deterministic rotation state (least-recently-served)
-  updatedAt DateTime @updatedAt
+  id              String    @id @default(cuid())
+  creatorId       String    @unique
+  creator         Creator   @relation(fields: [creatorId], references: [id])
+  slots           Json // post times
+  rotation        Json // deterministic rotation state (least-recently-served)
+  slotsPerDay     Int       @default(1) // evenly spaced UTC cadence anchored at 09:00
+  lastScheduledAt DateTime?
+  updatedAt       DateTime  @updatedAt
 }
 
 model LearningEvent {
