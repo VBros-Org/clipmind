@@ -11,6 +11,8 @@ import {
 import type { InitialTenets } from "./tenets";
 import type { Transcript } from "./transcript";
 
+export const DEFAULT_CREATOR_STEWARD_EMAIL = "georgebracher23@gmail.com";
+
 export interface CreatorRef {
   id: string;
 }
@@ -31,6 +33,7 @@ export interface OnboardingRepository {
 export interface CreatorOnboardingOptions {
   creatorId?: string;
   channelUrl?: string;
+  stewardEmail?: string;
   corpusItems: CorpusItem[];
   repository: OnboardingRepository;
   transcribeItem(item: CorpusItem): Promise<Transcript>;
@@ -42,6 +45,8 @@ export interface CreatorOnboardingResult {
   status: "PASSED" | "DEFERRED";
   creatorId: string;
   mindId: string | null;
+  mindEmail: string | null;
+  verifyTenetsReply: string | null;
   tenets: InitialTenets;
   transcriptCount: number;
   message: string;
@@ -77,24 +82,34 @@ export async function onboardCreator(
       status: "DEFERRED",
       creatorId: creator.id,
       mindId: null,
+      mindEmail: null,
+      verifyTenetsReply: null,
       tenets,
       transcriptCount: transcripts.length,
       message: MINDS_CREATION_SKIPPED_MESSAGE,
     };
   }
 
-  const mind = await options.mindsClient.createMind(buildMindName(creator.id));
+  const stewardEmail =
+    options.stewardEmail?.trim() || DEFAULT_CREATOR_STEWARD_EMAIL;
+  const mind = await options.mindsClient.createMind(
+    buildMindName(creator.id),
+    stewardEmail,
+  );
   await options.mindsClient.addTenets(mind.mindId, tenets);
   await options.repository.saveMindIdAndInitialTenets(
     creator.id,
     mind.mindId,
     tenets,
   );
+  const verifyTenetsReply = await options.mindsClient.verifyTenets(mind.mindId);
 
   return {
     status: "PASSED",
     creatorId: creator.id,
     mindId: mind.mindId,
+    mindEmail: mind.mindEmail,
+    verifyTenetsReply,
     tenets,
     transcriptCount: transcripts.length,
     message: `Mind created for Creator ${creator.id}`,

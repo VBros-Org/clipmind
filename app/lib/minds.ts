@@ -1,5 +1,12 @@
-import type { BuilderMind } from "@animocabrands/minds-client-lib";
+import type {
+  MessagingEvent,
+  MindsClient as MindsMessagingClient,
+} from "@animocabrands/minds-client-lib";
 
+import {
+  buildTenetSeedMessage,
+  buildTenetVerificationMessage,
+} from "./prompts/tenet-seed";
 import type { InitialTenets } from "./tenets";
 
 export const MINDS_BUILDER_API_KEY_ENV = "MINDS_BUILDER_API_KEY";
@@ -8,13 +15,26 @@ export const MINDS_BUILDER_API_BASE_URL = "https://api.build.hellominds.ai";
 export const MINDS_CREATION_SKIPPED_MESSAGE =
   "MINDS_BUILDER_API_KEY not set, Mind creation skipped";
 
+const MIND_CREATE_PATH = "/v1/minds/one-click";
+const TENET_SEED_ALIAS_PREFIX = "clipmind-onboarding";
+const TENET_VERIFY_ALIAS_PREFIX = "clipmind-verify";
+const MIND_REPLY_TIMEOUT_MS = 300_000;
+const importMindsClientLib = new Function(
+  "specifier",
+  "return import(specifier)",
+) as (
+  specifier: string,
+) => Promise<typeof import("@animocabrands/minds-client-lib")>;
+
 export interface MindCreationResult {
   mindId: string;
+  mindEmail: string;
 }
 
 export interface MindsClient {
-  createMind(name: string): Promise<MindCreationResult>;
+  createMind(name: string, stewardEmail: string): Promise<MindCreationResult>;
   addTenets(mindId: string, tenets: InitialTenets): Promise<void>;
+  verifyTenets(mindId: string): Promise<string>;
 }
 
 export type MindsFetchLike = (
@@ -22,9 +42,44 @@ export type MindsFetchLike = (
   init?: RequestInit,
 ) => Promise<Pick<Response, "ok" | "status" | "text" | "json">>;
 
+export type MindsMessagingClientFactory = (
+  builderApiKey: string,
+) => MindsMessagingClientLike;
+
+export interface MindsMessagingClientLike {
+  ensureConversation(
+    alias: string,
+    mindId: string,
+  ): Promise<Record<string, unknown>>;
+  getLatestHistoryFingerprint(
+    alias: string,
+    signal?: AbortSignal,
+  ): Promise<string | undefined>;
+  sendMessage(body: {
+    alias: string;
+    messageText: string;
+  }): Promise<Record<string, unknown>>;
+  waitForReply(args: {
+    alias: string;
+    timeoutMs: number;
+    sentMessageText?: string;
+    afterFingerprint?: string;
+    signal?: AbortSignal;
+  }): Promise<
+    | {
+        reply: Pick<MessagingEvent, "messageText">;
+        timedOut: false;
+      }
+    | {
+        timedOut: true;
+      }
+  >;
+}
+
 export function createMindsClientFromEnv(
   env = process.env,
   fetchImpl: MindsFetchLike = fetch,
+  messagingClientFactory: MindsMessagingClientFactory = createMessagingClient,
 ): MindsClient | null {
   const builderApiKey = env[MINDS_BUILDER_API_KEY_ENV]?.trim();
   if (!builderApiKey) {
@@ -35,6 +90,7 @@ export function createMindsClientFromEnv(
     baseUrl: env.MINDS_BUILDER_API_BASE_URL?.trim() || MINDS_BUILDER_API_BASE_URL,
     builderApiKey,
     fetchImpl,
+    messagingClient: messagingClientFactory(builderApiKey),
   });
 }
 
@@ -42,39 +98,103 @@ class BuilderApiMindsClient implements MindsClient {
   private readonly baseUrl: string;
   private readonly builderApiKey: string;
   private readonly fetchImpl: MindsFetchLike;
+  private readonly messagingClient: MindsMessagingClientLike;
 
   constructor(args: {
     baseUrl: string;
     builderApiKey: string;
     fetchImpl: MindsFetchLike;
+    messagingClient: MindsMessagingClientLike;
   }) {
     this.baseUrl = args.baseUrl.replace(/\/$/, "");
     this.builderApiKey = args.builderApiKey;
     this.fetchImpl = args.fetchImpl;
+    this.messagingClient = args.messagingClient;
   }
 
-  async createMind(name: string): Promise<MindCreationResult> {
-    const payload = await this.requestJson<BuilderMind | { mind: BuilderMind }>(
-      "/v1/minds",
+  async createMind(
+    name: string,
+    stewardEmail: string,
+  ): Promise<MindCreationResult> {
+    const payload = await this.requestJson<Record<string, unknown>>(
+      MIND_CREATE_PATH,
       {
         method: "POST",
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({
+          stewardEmail,
+          mindName: name,
+          archetype: "organisational",
+          species: "moca",
+        }),
       },
     );
 
-    const mind = extractMindPayload(payload);
-    if (typeof mind.mindId !== "string" || !mind.mindId.trim()) {
-      throw new Error("Minds createMind response did not include mindId.");
-    }
+    const mindId = readRequiredString(payload, "mindId", "createMind response");
+    const mindEmail = readRequiredString(
+      payload,
+      "mindEmail",
+      "createMind response",
+    );
 
-    return { mindId: mind.mindId };
+    return { mindId, mindEmail };
   }
 
   async addTenets(mindId: string, tenets: InitialTenets): Promise<void> {
-    await this.requestJson(`/v1/minds/${encodeURIComponent(mindId)}/tenets`, {
-      method: "POST",
-      body: JSON.stringify({ tenets }),
+    const alias = buildConversationAlias(TENET_SEED_ALIAS_PREFIX, mindId);
+    const messageText = buildTenetSeedMessage(tenets);
+
+    await this.messagingClient.ensureConversation(alias, mindId);
+    const afterFingerprint =
+      await this.messagingClient.getLatestHistoryFingerprint(alias);
+    await this.messagingClient.sendMessage({ alias, messageText });
+    await this.waitForMindReply({
+      alias,
+      messageText,
+      afterFingerprint,
+      action: "Tenet seed",
     });
+  }
+
+  async verifyTenets(mindId: string): Promise<string> {
+    const alias = buildConversationAlias(TENET_VERIFY_ALIAS_PREFIX, mindId);
+    const messageText = buildTenetVerificationMessage();
+
+    await this.messagingClient.ensureConversation(alias, mindId);
+    const afterFingerprint =
+      await this.messagingClient.getLatestHistoryFingerprint(alias);
+    await this.messagingClient.sendMessage({ alias, messageText });
+
+    return this.waitForMindReply({
+      alias,
+      messageText,
+      afterFingerprint,
+      action: "Tenet verification",
+    });
+  }
+
+  private async waitForMindReply(args: {
+    alias: string;
+    messageText: string;
+    afterFingerprint?: string;
+    action: string;
+  }): Promise<string> {
+    const outcome = await this.messagingClient.waitForReply({
+      alias: args.alias,
+      timeoutMs: MIND_REPLY_TIMEOUT_MS,
+      sentMessageText: args.messageText,
+      afterFingerprint: args.afterFingerprint,
+    });
+
+    if (outcome.timedOut) {
+      throw new Error(`${args.action} timed out waiting for a Mind reply.`);
+    }
+
+    const replyText = outcome.reply.messageText?.trim();
+    if (!replyText) {
+      throw new Error(`${args.action} reply did not include message text.`);
+    }
+
+    return replyText;
   }
 
   private async requestJson<T>(
@@ -101,19 +221,51 @@ class BuilderApiMindsClient implements MindsClient {
   }
 }
 
-function extractMindPayload(payload: unknown): Record<string, unknown> {
-  if (!isRecord(payload)) {
-    throw new Error("Minds createMind response must be a JSON object.");
+function createMessagingClient(builderApiKey: string): MindsMessagingClientLike {
+  let clientPromise: Promise<MindsMessagingClient> | null = null;
+
+  async function getClient(): Promise<MindsMessagingClient> {
+    clientPromise ??= importMindsClientLib(
+      "@animocabrands/minds-client-lib",
+    ).then((module) =>
+      module.createMindsClient({
+        builderApiKey,
+      }),
+    );
+
+    return clientPromise;
   }
 
-  const nestedMind = payload.mind;
-  if (isRecord(nestedMind)) {
-    return nestedMind;
-  }
-
-  return payload;
+  return {
+    async ensureConversation(alias, mindId) {
+      return (await getClient()).ensureConversation(alias, mindId);
+    },
+    async getLatestHistoryFingerprint(alias, signal) {
+      return (await getClient()).getLatestHistoryFingerprint(alias, signal);
+    },
+    async sendMessage(body) {
+      return (await getClient()).sendMessage(body);
+    },
+    async waitForReply(args) {
+      return (await getClient()).waitForReply(args);
+    },
+  };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function readRequiredString(
+  payload: Record<string, unknown>,
+  key: string,
+  context: string,
+): string {
+  const value = payload[key];
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`Minds ${context} did not include ${key}.`);
+  }
+
+  return value;
+}
+
+function buildConversationAlias(prefix: string, mindId: string): string {
+  const suffix = mindId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 12) || "mind";
+  return `${prefix}-${suffix}`.slice(0, 64);
 }

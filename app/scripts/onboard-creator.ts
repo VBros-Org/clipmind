@@ -9,6 +9,7 @@ import type { CorpusSourceType } from "../lib/prompts/voice-distill";
 interface CliOptions {
   creatorId?: string;
   channelUrl?: string;
+  stewardEmail?: string;
   corpus: { source: string; sourceType: CorpusSourceType }[];
 }
 
@@ -21,6 +22,7 @@ async function main() {
   const result = await onboardCreator({
     creatorId: options.creatorId,
     channelUrl: options.channelUrl,
+    stewardEmail: options.stewardEmail,
     corpusItems,
     repository: createPrismaOnboardingRepository(prisma),
     transcribeItem: createClipServiceTranscriber(clipServiceConfigFromEnv()),
@@ -39,6 +41,9 @@ async function main() {
   }
 
   console.log(`Mind id=${result.mindId}`);
+  console.log(`Mind email=${result.mindEmail}`);
+  console.log("Verify Tenets reply:");
+  console.log(result.verifyTenetsReply);
   console.log("PASSED creator onboarding");
 }
 
@@ -62,6 +67,11 @@ function parseArgs(argv: string[]): CliOptions {
 
     if (arg === "--channel-url") {
       options.channelUrl = readValue(argv, (index += 1), arg);
+      continue;
+    }
+
+    if (arg === "--steward-email") {
+      options.stewardEmail = readValue(argv, (index += 1), arg);
       continue;
     }
 
@@ -137,6 +147,7 @@ function printUsage() {
       "Options:",
       "  --creator-id <id|new>    Use an existing id, create that id, or pass new.",
       "  --channel-url <url>       Optional channel URL for new creators.",
+      "  --steward-email <email>   Optional steward email for the new Mind.",
       "  --video <path-or-url>     Source video or long-form corpus item.",
       "  --clip <path-or-url>      Existing posted clip, weighted highest.",
       "  clip:<path-or-url>        Positional existing clip shorthand.",

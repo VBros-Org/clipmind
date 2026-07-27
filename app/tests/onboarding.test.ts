@@ -6,6 +6,7 @@ import {
   type MindsClient,
 } from "../lib/minds";
 import {
+  DEFAULT_CREATOR_STEWARD_EMAIL,
   onboardCreator,
   type OnboardingRepository,
 } from "../lib/onboarding";
@@ -31,7 +32,11 @@ const tenets: InitialTenets = {
 
 test("onboarding persists mindId and initial Tenets when Minds client succeeds", async () => {
   const repository = recordingRepository("creator_1");
-  const mindsClient = recordingMindsClient("mind_123");
+  const mindsClient = recordingMindsClient(
+    "mind_123",
+    "mind_123@hellominds.ai",
+    "I remember the dry reaction style.",
+  );
 
   const result = await onboardCreator({
     creatorId: "creator_1",
@@ -54,9 +59,16 @@ test("onboarding persists mindId and initial Tenets when Minds client succeeds",
 
   assert.equal(result.status, "PASSED");
   assert.equal(result.mindId, "mind_123");
+  assert.equal(result.mindEmail, "mind_123@hellominds.ai");
+  assert.equal(result.verifyTenetsReply, "I remember the dry reaction style.");
   assert.deepEqual(repository.savedMindId, "mind_123");
   assert.deepEqual(repository.savedTenets, tenets);
+  assert.deepEqual(mindsClient.createdMind, {
+    name: "ClipMind creator1",
+    stewardEmail: DEFAULT_CREATOR_STEWARD_EMAIL,
+  });
   assert.deepEqual(mindsClient.addedTenets, tenets);
+  assert.equal(mindsClient.verifiedMindId, "mind_123");
 });
 
 test("onboarding defers Mind creation when the Minds client is absent", async () => {
@@ -83,8 +95,44 @@ test("onboarding defers Mind creation when the Minds client is absent", async ()
 
   assert.equal(result.status, "DEFERRED");
   assert.equal(result.message, MINDS_CREATION_SKIPPED_MESSAGE);
+  assert.equal(result.mindEmail, null);
+  assert.equal(result.verifyTenetsReply, null);
   assert.equal(repository.savedMindId, null);
   assert.deepEqual(repository.savedTenets, tenets);
+});
+
+test("onboarding passes an explicit steward email to Minds creation", async () => {
+  const repository = recordingRepository("creator_3");
+  const mindsClient = recordingMindsClient(
+    "mind_456",
+    "mind_456@hellominds.ai",
+    "I remember the fast payoff style.",
+  );
+
+  await onboardCreator({
+    creatorId: "creator_3",
+    stewardEmail: "creator@example.com",
+    corpusItems: [
+      {
+        source: "source.mp4",
+        sourceType: "source_video",
+        weight: 1,
+      },
+    ],
+    repository,
+    transcribeItem: async () => ({
+      text: "This is a source video.",
+      segments: [],
+      words: [],
+    }),
+    distillTenets: async () => tenets,
+    mindsClient,
+  });
+
+  assert.deepEqual(mindsClient.createdMind, {
+    name: "ClipMind creator3",
+    stewardEmail: "creator@example.com",
+  });
 });
 
 function recordingRepository(creatorId: string) {
@@ -111,17 +159,28 @@ function recordingRepository(creatorId: string) {
   } satisfies OnboardingRepository);
 }
 
-function recordingMindsClient(mindId: string) {
+function recordingMindsClient(
+  mindId: string,
+  mindEmail: string,
+  verifyTenetsReply: string,
+) {
   const state = {
+    createdMind: null as { name: string; stewardEmail: string } | null,
     addedTenets: null as InitialTenets | null,
+    verifiedMindId: null as string | null,
   };
 
   return Object.assign(state, {
-    async createMind() {
-      return { mindId };
+    async createMind(name: string, stewardEmail: string) {
+      state.createdMind = { name, stewardEmail };
+      return { mindId, mindEmail };
     },
     async addTenets(_mindId: string, value: InitialTenets) {
       state.addedTenets = value;
+    },
+    async verifyTenets(value: string) {
+      state.verifiedMindId = value;
+      return verifyTenetsReply;
     },
   } satisfies MindsClient);
 }
