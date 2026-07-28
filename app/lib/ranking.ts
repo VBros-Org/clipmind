@@ -9,6 +9,10 @@ import { buildRankClipsMessage } from "./prompts/rank-clips";
 
 const MAX_RANKING_ATTEMPTS = 2;
 const NOT_RANKED_REASON = "not ranked by Mind";
+const importDb = new Function(
+  "specifier",
+  "return import(specifier)",
+) as (specifier: string) => Promise<typeof import("./db")>;
 
 export type RankingClipStatus =
   | "candidate"
@@ -344,7 +348,7 @@ async function createPrismaRankingStore(
     return new PrismaRankingStore(prismaClient);
   }
 
-  const { prisma } = await import("./db.js");
+  const { prisma } = await importDb("./db.js");
   return new PrismaRankingStore(prisma);
 }
 
