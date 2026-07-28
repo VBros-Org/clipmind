@@ -11,6 +11,12 @@ import { scheduleSettingsFromRow, type ScheduleSettings } from "./schedule-setti
 import { publicMediaUrlForKey } from "./storage";
 import { formatVideoLabel } from "./video-label";
 import type { PostCopyVariants } from "./captioning";
+import {
+  creatorHasReadyMind,
+  creatorNeedsMindOnboarding,
+  failedMindOnboardingStage,
+  isMindOnboardingStage,
+} from "./video-onboarding";
 
 export type { HomeNudge, RunwayState } from "./home-rules";
 
@@ -60,9 +66,15 @@ export type RecentUpload = {
   clipCount: number;
 };
 
+export type UploadOverview = {
+  needsMindCorpus: boolean;
+  recentUploads: RecentUpload[];
+};
+
 export type RhythmOverview = {
   schedule: ScheduleSettings | null;
   creator: {
+    displayName: string | null;
     channelUrl: string | null;
     captionPreset: string;
   };
@@ -260,43 +272,76 @@ export async function loadRecentUploads(
   creatorId: string,
   options: AppOverviewOptions = {},
 ): Promise<RecentUpload[]> {
+  return (await loadUploadOverview(creatorId, options)).recentUploads;
+}
+
+export async function loadUploadOverview(
+  creatorId: string,
+  options: AppOverviewOptions = {},
+): Promise<UploadOverview> {
   const db = options.prismaClient ?? prisma;
-  const videos = await db.video.findMany({
-    where: {
-      creatorId,
-    },
-    orderBy: [
-      {
-        createdAt: "desc",
+  const [creator, videos] = await Promise.all([
+    db.creator.findUniqueOrThrow({
+      where: {
+        id: creatorId,
       },
-      {
-        id: "asc",
+      select: {
+        mindId: true,
+        mindStage: true,
+        mindError: true,
       },
-    ],
-    take: 3,
-    select: {
-      id: true,
-      status: true,
-      pipelineStage: true,
-      pipelineError: true,
-      createdAt: true,
-      clips: {
-        select: {
-          id: true,
+    }),
+    db.video.findMany({
+      where: {
+        creatorId,
+      },
+      orderBy: [
+        {
+          createdAt: "desc",
+        },
+        {
+          id: "asc",
+        },
+      ],
+      take: 3,
+      select: {
+        id: true,
+        status: true,
+        pipelineStage: true,
+        pipelineError: true,
+        createdAt: true,
+        clips: {
+          select: {
+            id: true,
+          },
         },
       },
-    },
-  });
+    }),
+  ]);
 
-  return videos.map((video) => ({
-    id: video.id,
-    label: formatVideoLabel(video.createdAt),
-    status: displayPipelineStage(video.pipelineStage, video.status),
-    pipelineStage: displayPipelineStage(video.pipelineStage, video.status),
-    pipelineError: video.pipelineError,
-    createdAtIso: video.createdAt.toISOString(),
-    clipCount: video.clips.length,
-  }));
+  const needsMindCorpus = creatorNeedsMindOnboarding(creator);
+
+  return {
+    needsMindCorpus,
+    recentUploads: videos.map((video) => {
+      const displayStage = displayUploadStage({
+        creator,
+        pipelineStage: video.pipelineStage,
+        pipelineError: video.pipelineError,
+        status: video.status,
+      });
+
+      return {
+        id: video.id,
+        label: formatVideoLabel(video.createdAt),
+        status: displayStage.stage,
+        pipelineStage: displayStage.stage,
+        pipelineError: displayStage.error,
+        createdAtIso: video.createdAt.toISOString(),
+        clipCount: video.clips.length,
+      };
+    }),
+  };
 }
 
 export async function loadRhythmOverview(
@@ -309,6 +354,7 @@ export async function loadRhythmOverview(
       id: creatorId,
     },
     select: {
+      displayName: true,
       channelUrl: true,
       captionStyle: true,
       schedule: {
@@ -327,6 +373,7 @@ export async function loadRhythmOverview(
   return {
     schedule: scheduleSettingsFromRow(creator.schedule),
     creator: {
+      displayName: creator.displayName,
       channelUrl: creator.channelUrl,
       captionPreset: captionPresetFromStyle(creator.captionStyle),
     },
@@ -436,6 +483,47 @@ function displayPipelineStage(
     default:
       return "uploaded";
   }
+}
+
+function displayUploadStage(args: {
+  creator: {
+    mindId: string | null;
+    mindStage: string | null;
+    mindError: string | null;
+  };
+  pipelineStage: string | null;
+  pipelineError: string | null;
+  status: string;
+}): {
+  stage: string;
+  error: string | null;
+} {
+  if (!creatorHasReadyMind(args.creator)) {
+    if (args.creator.mindStage === "failed") {
+      return {
+        stage: "failed",
+        error:
+          args.creator.mindError ??
+          `${failedMindOnboardingStage(args.creator.mindError)}: Mind onboarding failed.`,
+      };
+    }
+    if (isMindOnboardingStage(args.creator.mindStage)) {
+      return {
+        stage: args.creator.mindStage,
+        error: null,
+      };
+    }
+
+    return {
+      stage: "learning_voice",
+      error: null,
+    };
+  }
+
+  return {
+    stage: displayPipelineStage(args.pipelineStage, args.status),
+    error: args.pipelineError,
+  };
 }
 
 function isRecord(value: Prisma.JsonValue): value is Record<string, Prisma.JsonValue> {

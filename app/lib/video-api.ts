@@ -19,17 +19,30 @@ import {
   type R2Storage,
   type StorageUploadBody,
 } from "./storage";
+import {
+  creatorNeedsMindOnboarding,
+  failedMindOnboardingStage,
+  isMindOnboardingStage,
+  runFirstVideoOnboardingPipeline,
+  type FirstVideoOnboardingResult,
+  type MindOnboardingStage,
+} from "./video-onboarding";
 
 export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 export const MAX_UPLOAD_BYTES_LABEL = "2 GB";
 
 type RouteParams = { id: string } | Promise<{ id: string }>;
+type UploadWorkflowStage = PipelineStage | MindOnboardingStage;
+type BackgroundRunResult = PipelineRunResult | FirstVideoOnboardingResult;
 
 export type VideoApiOptions = {
   prismaClient?: PrismaClient;
   storage?: Pick<R2Storage, "uploadSource">;
-  runPipelineImpl?: (videoId: string) => Promise<PipelineRunResult>;
-  retryPipelineImpl?: (videoId: string) => Promise<PipelineRunResult>;
+  runPipelineImpl?: (videoId: string) => Promise<BackgroundRunResult>;
+  retryPipelineImpl?: (videoId: string) => Promise<BackgroundRunResult>;
+  runFirstVideoOnboardingPipelineImpl?: (
+    videoId: string,
+  ) => Promise<BackgroundRunResult>;
 };
 
 type UploadedFile = {
@@ -60,6 +73,16 @@ export async function handleUploadVideo(
 
     const db = options.prismaClient ?? prisma;
     const storage = options.storage ?? createR2Storage();
+    const creator = await db.creator.findUniqueOrThrow({
+      where: {
+        id: session.creatorId,
+      },
+      select: {
+        mindId: true,
+        mindStage: true,
+      },
+    });
+    const runMindOnboarding = creatorNeedsMindOnboarding(creator);
     const videoId = randomUUID();
     const upload = await streamMultipartVideoToStorage(
       request,
@@ -83,16 +106,31 @@ export async function handleUploadVideo(
       },
     });
 
+    if (runMindOnboarding) {
+      await db.creator.update({
+        where: {
+          id: session.creatorId,
+        },
+        data: {
+          mindStage: "learning_voice",
+          mindError: null,
+        },
+      });
+    }
+
     startPipelineInBackground(
       video.id,
-      options.runPipelineImpl ?? runPipeline,
+      runMindOnboarding
+        ? options.runFirstVideoOnboardingPipelineImpl ??
+            runFirstVideoOnboardingPipeline
+        : options.runPipelineImpl ?? runPipeline,
       "upload pipeline",
     );
 
     return json(
       {
         videoId: video.id,
-        stage: "uploaded",
+        stage: runMindOnboarding ? "learning_voice" : "uploaded",
         bytes: upload.bytes,
       },
       202,
@@ -127,6 +165,13 @@ export async function handleGetVideoStatus(
       pipelineStage: true,
       pipelineError: true,
       status: true,
+      creator: {
+        select: {
+          mindId: true,
+          mindStage: true,
+          mindError: true,
+        },
+      },
       clips: {
         select: {
           id: true,
@@ -139,14 +184,13 @@ export async function handleGetVideoStatus(
     return json({ error: "Video not found." }, 404);
   }
 
+  const workflow = normalizedUploadWorkflowStage(video);
+
   return json(
     {
-      stage: normalizedPipelineStage(video.pipelineStage, video.status),
-      error: video.pipelineError,
-      failedStage:
-        video.pipelineStage === "failed"
-          ? failedPipelineStage(video.pipelineError)
-          : null,
+      stage: workflow.stage,
+      error: workflow.error,
+      failedStage: workflow.failedStage,
       clipCount: video.clips.length,
     },
     200,
@@ -174,12 +218,43 @@ export async function handleRetryVideo(
       id: true,
       pipelineStage: true,
       pipelineError: true,
+      creator: {
+        select: {
+          mindId: true,
+          mindStage: true,
+          mindError: true,
+        },
+      },
     },
   });
 
   if (!video) {
     return json({ error: "Video not found." }, 404);
   }
+
+  if (creatorNeedsMindOnboarding(video.creator)) {
+    if (video.creator.mindStage !== "failed") {
+      return json({ error: "Only failed uploads can be retried." }, 409);
+    }
+
+    const retryStage = failedMindOnboardingStage(video.creator.mindError);
+    startPipelineInBackground(
+      video.id,
+      options.runFirstVideoOnboardingPipelineImpl ??
+        runFirstVideoOnboardingPipeline,
+      "Mind onboarding retry",
+    );
+
+    return json(
+      {
+        videoId: video.id,
+        retrying: true,
+        stage: retryStage,
+      },
+      202,
+    );
+  }
+
   if (video.pipelineStage !== "failed") {
     return json({ error: "Only failed uploads can be retried." }, 409);
   }
@@ -382,7 +457,7 @@ function readUploadFileSize(request: Request): number {
 
 function startPipelineInBackground(
   videoId: string,
-  run: (videoId: string) => Promise<PipelineRunResult>,
+  run: (videoId: string) => Promise<BackgroundRunResult>,
   label: string,
 ): void {
   void run(videoId)
@@ -426,6 +501,53 @@ function normalizedPipelineStage(
     default:
       return "uploaded";
   }
+}
+
+function normalizedUploadWorkflowStage(video: {
+  pipelineStage: string | null;
+  pipelineError: string | null;
+  status: string;
+  creator: {
+    mindId: string | null;
+    mindStage: string | null;
+    mindError: string | null;
+  };
+}): {
+  stage: UploadWorkflowStage;
+  error: string | null;
+  failedStage: UploadWorkflowStage | null;
+} {
+  if (creatorNeedsMindOnboarding(video.creator)) {
+    if (video.creator.mindStage === "failed") {
+      return {
+        stage: "failed",
+        error: video.creator.mindError,
+        failedStage: failedMindOnboardingStage(video.creator.mindError),
+      };
+    }
+
+    if (isMindOnboardingStage(video.creator.mindStage)) {
+      return {
+        stage: video.creator.mindStage,
+        error: null,
+        failedStage: null,
+      };
+    }
+
+    return {
+      stage: "learning_voice",
+      error: null,
+      failedStage: null,
+    };
+  }
+
+  const stage = normalizedPipelineStage(video.pipelineStage, video.status);
+  return {
+    stage,
+    error: video.pipelineError,
+    failedStage:
+      stage === "failed" ? failedPipelineStage(video.pipelineError) : null,
+  };
 }
 
 function headersObject(headers: Headers): Record<string, string> {

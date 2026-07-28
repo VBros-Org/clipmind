@@ -207,6 +207,67 @@ test("retry endpoint is creator scoped and starts a failed-stage retry in the ba
   }
 });
 
+test("retry endpoint is creator scoped for failed Mind onboarding", async () => {
+  const fixture = await createFixture();
+  const retryCalls: string[] = [];
+
+  try {
+    const video = await createVideo(fixture, {
+      pipelineStage: "uploaded",
+      clipCount: 0,
+    });
+    fixture.videoId = video.id;
+    await prisma.creator.update({
+      where: {
+        id: fixture.creatorAId,
+      },
+      data: {
+        mindId: null,
+        mindStage: "failed",
+        mindError: "waking_mind: Mind creation timed out",
+      },
+    });
+
+    const crossCreator = await handleRetryVideo(
+      requestWithCode(video.id, fixture.creatorBCode, "POST"),
+      { id: video.id },
+      {
+        async runFirstVideoOnboardingPipelineImpl() {
+          throw new Error("Cross creator Mind retry should not run.");
+        },
+      },
+    );
+    assert.equal(crossCreator.status, 404);
+
+    const response = await handleRetryVideo(
+      requestWithCode(video.id, fixture.creatorACode, "POST"),
+      { id: video.id },
+      {
+        async runFirstVideoOnboardingPipelineImpl(videoId) {
+          retryCalls.push(videoId);
+          return {
+            status: "failed",
+            videoId,
+            creatorId: fixture.creatorAId,
+            failedStage: "waking_mind",
+            error: "waking_mind: Mind creation timed out",
+          };
+        },
+      },
+    );
+
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), {
+      videoId: video.id,
+      retrying: true,
+      stage: "waking_mind",
+    });
+    assert.deepEqual(retryCalls, [video.id]);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
 async function createFixture(): Promise<VideoApiFixture> {
   const marker = `video-api-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const creatorA = await prisma.creator.create({

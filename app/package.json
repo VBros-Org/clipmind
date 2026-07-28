@@ -35,6 +35,8 @@
     "backfill:thumbs": "tsc -p tsconfig.scripts.json && node --env-file=.env dist/scripts/backfill-thumbs.js",
     "preset:access-code": "prisma generate",
     "set:access-code": "tsc -p tsconfig.scripts.json && node --env-file=.env dist/scripts/set-access-code.js",
+    "premint:invite": "prisma generate",
+    "mint:invite": "tsc -p tsconfig.scripts.json && node --env-file=.env dist/scripts/mint-invite.js",
     "pretest:ranking": "prisma generate",
     "test:ranking": "tsc -p tsconfig.scripts.json && node --test dist/tests/ranking.test.js",
     "test:pwa": "tsc -p tsconfig.scripts.json && node --test dist/tests/pwa.test.js dist/tests/video-label.test.js",
@@ -44,7 +46,8 @@
     "test:scheduling": "tsc -p tsconfig.scripts.json && node --test dist/tests/scheduling.test.js dist/tests/home-rules.test.js",
     "test:scheduling:db": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env dist/tests/scheduling-db.test.js",
     "test:review": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env --test dist/tests/review-api.test.js dist/tests/schedule-api.test.js",
-    "test:pipeline": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env --test dist/tests/pipeline.test.js dist/tests/video-api.test.js"
+    "test:pipeline": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env --test dist/tests/pipeline.test.js dist/tests/video-api.test.js",
+    "test:signup": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env --test dist/tests/signup-api.test.js dist/tests/video-onboarding.test.js"
   },
   "engines": {
     "node": ">=22"

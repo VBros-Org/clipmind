@@ -33,6 +33,15 @@ export function createPrismaOnboardingRepository(
       return { id: created.id };
     },
 
+    async saveMindId(creatorId: string, mindId: string) {
+      await prisma.creator.update({
+        where: { id: creatorId },
+        data: {
+          mindId,
+        },
+      });
+    },
+
     async saveInitialTenets(creatorId: string, tenets: InitialTenets) {
       await prisma.creator.update({
         where: { id: creatorId },

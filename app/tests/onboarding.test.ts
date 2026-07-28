@@ -148,6 +148,9 @@ function recordingRepository(creatorId: string) {
     async saveInitialTenets(_creatorId: string, value: InitialTenets) {
       state.savedTenets = value;
     },
+    async saveMindId(_creatorId: string, mindId: string) {
+      state.savedMindId = mindId;
+    },
     async saveMindIdAndInitialTenets(
       _creatorId: string,
       mindId: string,
