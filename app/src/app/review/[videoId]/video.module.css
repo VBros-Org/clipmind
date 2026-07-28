@@ -1,0 +1,209 @@
+.screen {
+  min-height: 100dvh;
+  padding: 14px;
+}
+
+.shell {
+  width: min(100%, 1040px);
+  margin: 0 auto;
+}
+
+.topBar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin: 8px 0 16px;
+}
+
+.back {
+  color: #7fd1c7;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.title {
+  margin: 0;
+  font-size: 28px;
+  line-height: 1.08;
+  overflow-wrap: anywhere;
+}
+
+.subhead {
+  margin: 6px 0 18px;
+  color: #a9b9c5;
+  line-height: 1.45;
+}
+
+.clipList {
+  display: grid;
+  gap: 18px;
+  padding-bottom: 30px;
+}
+
+.clipCard {
+  display: grid;
+  gap: 14px;
+  border: 1px solid rgba(247, 242, 232, 0.12);
+  border-radius: 8px;
+  background: rgba(18, 25, 35, 0.94);
+  padding: 14px;
+}
+
+.clipCardRejected {
+  opacity: 0.56;
+}
+
+.clipHeader {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.rank {
+  display: inline-flex;
+  min-width: 72px;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #f0c36a;
+  color: #14110a;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.status {
+  color: #a9b9c5;
+  font-size: 13px;
+  text-transform: capitalize;
+}
+
+.reason {
+  margin: 0;
+  color: #f7f2e8;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.meta {
+  margin: 4px 0 0;
+  color: #a9b9c5;
+  font-size: 13px;
+}
+
+.videoWrap {
+  overflow: hidden;
+  border: 1px solid rgba(247, 242, 232, 0.1);
+  border-radius: 8px;
+  background: #05070a;
+}
+
+.video {
+  display: block;
+  width: 100%;
+  max-height: 72dvh;
+  aspect-ratio: 9 / 16;
+  object-fit: contain;
+  background: #05070a;
+}
+
+.snippet {
+  margin: 0;
+  color: #c9d5de;
+  line-height: 1.45;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.button {
+  min-height: 48px;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.accept {
+  background: #5fb3b3;
+  color: #061315;
+}
+
+.reject {
+  background: #26313d;
+  color: #f7f2e8;
+}
+
+.captions {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid rgba(247, 242, 232, 0.1);
+  padding-top: 12px;
+}
+
+.captionsTitle {
+  margin: 0;
+  font-size: 15px;
+}
+
+.captionRow {
+  display: grid;
+  gap: 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 10px;
+}
+
+.captionPlatform {
+  color: #7fd1c7;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.captionText {
+  margin: 0;
+  color: #e7eef3;
+  line-height: 1.42;
+  white-space: pre-wrap;
+}
+
+.copyButton {
+  min-height: 40px;
+  border: 1px solid rgba(247, 242, 232, 0.16);
+  border-radius: 8px;
+  background: transparent;
+  color: #f7f2e8;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.empty {
+  color: #a9b9c5;
+}
+
+@media (min-width: 760px) {
+  .clipCard {
+    grid-template-columns: minmax(260px, 360px) 1fr;
+    align-items: start;
+  }
+
+  .clipMain {
+    display: grid;
+    gap: 14px;
+  }
+
+  .video {
+    max-height: 640px;
+  }
+}

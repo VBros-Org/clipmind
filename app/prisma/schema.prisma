@@ -12,6 +12,7 @@ datasource db {
 
 model Creator {
   id            String    @id @default(cuid())
+  accessCode    String?   @unique
   channelUrl    String?
   mindId        String? // the creator's Minds agent (voice + clip-taste Tenets)
   initialTenets Json? // distilled creator voice + clip-taste Tenets from onboarding

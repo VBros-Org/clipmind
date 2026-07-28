@@ -127,7 +127,12 @@ test("pickNextClip never schedules candidate rejected scheduled or posted clips"
 });
 
 test("clip status transition guard accepts only the scheduling state machine path", () => {
-  const allowed = new Set(["accepted->scheduled", "scheduled->posted"]);
+  const allowed = new Set([
+    "candidate->accepted",
+    "candidate->rejected",
+    "accepted->scheduled",
+    "scheduled->posted",
+  ]);
 
   for (const from of statuses) {
     for (const to of statuses) {

@@ -91,6 +91,7 @@ test("renderClip uploads clip-service output and persists renderedUrl", async ()
       trim_start_ms: 250,
       trim_end_ms: 500,
       preset_id: "clean-bold",
+      transcript: "This is the moment.",
     });
 
     const updatedClip = await prisma.clip.findUniqueOrThrow({
