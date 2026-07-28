@@ -29,6 +29,18 @@ export type ScheduleTickResult =
       reason: "no_accepted_clips";
     };
 
+export type SchedulePassResult =
+  | {
+      status: "done";
+      creatorId: string;
+      scheduled: Extract<ScheduleTickResult, { status: "scheduled" }>[];
+    }
+  | {
+      status: "no_schedule";
+      creatorId: string;
+      scheduled: [];
+    };
+
 export type MarkPostedResult = {
   status: "posted";
   clipId: string;
@@ -54,6 +66,7 @@ export async function scheduleTick(
       },
       select: {
         slotsPerDay: true,
+        anchorHour: true,
         lastScheduledAt: true,
         rotation: true,
       },
@@ -183,6 +196,55 @@ export async function scheduleTick(
       scheduledFor,
     };
   });
+}
+
+export async function runSchedulePass(
+  creatorId: string,
+  now: Date = new Date(),
+  options: SchedulingRepositoryOptions = {},
+): Promise<SchedulePassResult> {
+  assertValidDate(now, "now");
+
+  const db = options.prismaClient ?? prisma;
+  const schedule = await db.schedule.findUnique({
+    where: {
+      creatorId,
+    },
+    select: {
+      id: true,
+    },
+  });
+
+  if (!schedule) {
+    return {
+      status: "no_schedule",
+      creatorId,
+      scheduled: [],
+    };
+  }
+
+  const acceptedClipCount = await db.clip.count({
+    where: {
+      creatorId,
+      status: "accepted",
+    },
+  });
+  const scheduled: Extract<ScheduleTickResult, { status: "scheduled" }>[] = [];
+
+  for (let index = 0; index < acceptedClipCount; index += 1) {
+    const result = await scheduleTick(creatorId, now, options);
+    if (result.status === "empty") {
+      break;
+    }
+
+    scheduled.push(result);
+  }
+
+  return {
+    status: "done",
+    creatorId,
+    scheduled,
+  };
 }
 
 export async function markPosted(

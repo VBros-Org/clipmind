@@ -69,14 +69,19 @@ model Clip {
 }
 
 model Schedule {
-  id              String    @id @default(cuid())
-  creatorId       String    @unique
-  creator         Creator   @relation(fields: [creatorId], references: [id])
-  slots           Json // post times
-  rotation        Json // deterministic rotation state (least-recently-served)
-  slotsPerDay     Int       @default(1) // evenly spaced UTC cadence anchored at 09:00
-  lastScheduledAt DateTime?
-  updatedAt       DateTime  @updatedAt
+  id                   String    @id @default(cuid())
+  creatorId            String    @unique
+  creator              Creator   @relation(fields: [creatorId], references: [id])
+  slots                Json // post times
+  rotation             Json // deterministic rotation state (least-recently-served)
+  slotsPerDay          Int       @default(1)
+  anchorHour           Int       @default(9)
+  reviewReminders      Boolean   @default(true)
+  runwayWarnings       Boolean   @default(true)
+  runwayThresholdDays  Int       @default(2)
+  postTimeNudges       Boolean   @default(true)
+  lastScheduledAt      DateTime?
+  updatedAt            DateTime  @updatedAt
 }
 
 model LearningEvent {

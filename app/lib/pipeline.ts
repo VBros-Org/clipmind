@@ -16,6 +16,7 @@ import {
   type RankCandidatesOptions,
   type RankCandidatesResult,
 } from "./ranking";
+import { runSchedulePass } from "./scheduling-repository";
 
 export const PIPELINE_STAGES = [
   "uploaded",
@@ -183,6 +184,9 @@ export async function runPipeline(
     }
 
     await setPipelineStage(db, video.id, "done", options);
+    await runSchedulePass(video.creatorId, new Date(), {
+      prismaClient: db,
+    });
     return doneResult(db, video.id, video.creatorId, captionedClipIds);
   } catch (error) {
     const failedStage = toRetryableStage(activeStage);

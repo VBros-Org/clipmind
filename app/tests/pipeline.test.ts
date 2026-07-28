@@ -81,6 +81,66 @@ test("runPipeline progresses uploaded video through ingest, ranking, top-two cap
   }
 });
 
+test("runPipeline triggers scheduling after the pipeline reaches done", async () => {
+  const fixture = await createPipelineFixture();
+  const mindsClient = scriptedMindsClient([
+    JSON.stringify([
+      { index: 2, reason: "Strongest turn." },
+      { index: 1, reason: "Clean setup." },
+    ]),
+    captionReply("First top clip"),
+    captionReply("Second top clip"),
+  ]);
+
+  try {
+    const acceptedClip = await prisma.clip.create({
+      data: {
+        creatorId: fixture.creatorId,
+        videoId: fixture.videoId,
+        startMs: 60_000,
+        endMs: 70_000,
+        transcript: "Already accepted before completion.",
+        status: "accepted",
+      },
+    });
+    await prisma.schedule.create({
+      data: {
+        creatorId: fixture.creatorId,
+        slots: [],
+        rotation: {},
+        slotsPerDay: 2,
+        anchorHour: 9,
+      },
+    });
+
+    const result = await runPipeline(fixture.videoId, {
+      prismaClient: prisma,
+      ingestOptions: fakeIngestOptions(fixture.videoId),
+      rankOptions: {
+        mindsClient,
+      },
+      captionOptions: {
+        mindsClient,
+      },
+    });
+    assert.equal(result.status, "done");
+
+    const scheduledClip = await prisma.clip.findUniqueOrThrow({
+      where: {
+        id: acceptedClip.id,
+      },
+      select: {
+        status: true,
+        scheduledFor: true,
+      },
+    });
+    assert.equal(scheduledClip.status, "scheduled");
+    assert.ok(scheduledClip.scheduledFor);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
 test("runPipeline stores a short named failure for every retryable stage", async () => {
   const cases: {
     stage: "transcribing" | "candidates" | "ranking" | "captions";
@@ -354,6 +414,11 @@ async function createPipelineFixture(
 }
 
 async function cleanupFixture(fixture: PipelineFixture): Promise<void> {
+  await prisma.schedule.deleteMany({
+    where: {
+      creatorId: fixture.creatorId,
+    },
+  });
   await prisma.clip.deleteMany({
     where: {
       creatorId: fixture.creatorId,

@@ -3,9 +3,11 @@ import { redirect } from "next/navigation";
 
 import { loadAppFrameData, loadRhythmOverview } from "../../../lib/app-overview";
 import { CREATOR_ACCESS_COOKIE } from "../../../lib/review-auth";
+import { DEFAULT_SCHEDULE_SETTINGS } from "../../../lib/schedule-settings";
 import { AppShell } from "../AppShell";
 import { requireCreatorSession } from "../app-session";
 
+import { RhythmControls } from "./RhythmControls";
 import styles from "./rhythm.module.css";
 
 const CAPTION_PRESETS = [
@@ -20,8 +22,6 @@ export default async function RhythmPage() {
     loadAppFrameData(session.creatorId),
     loadRhythmOverview(session.creatorId),
   ]);
-  const slotsPerDay = overview.schedule?.slotsPerDay ?? 2;
-  const firstHour = overview.schedule?.firstHourUtc ?? 9;
 
   return (
     <AppShell activeTab="rhythm" reviewCount={frame.reviewCount}>
@@ -31,61 +31,9 @@ export default async function RhythmPage() {
           <h1 className={styles.title}>Posting cadence</h1>
         </header>
 
-        <section className={styles.card} aria-labelledby="cadence-title">
-          <div className={styles.cardHeader}>
-            <h2 className={styles.sectionTitle} id="cadence-title">
-              Cadence
-            </h2>
-            <span className={styles.note}>Editable in the next build.</span>
-          </div>
-          <p className={styles.preview}>
-            {overview.schedule
-              ? cadenceSentence(slotsPerDay, firstHour)
-              : "Set a rhythm to start scheduling."}
-          </p>
-          <div className={styles.controlRow}>
-            <span>Slots per day</span>
-            <div className={styles.stepper} aria-label="Slots per day">
-              <button disabled type="button">
-                -
-              </button>
-              <span>{slotsPerDay}</span>
-              <button disabled type="button">
-                +
-              </button>
-            </div>
-          </div>
-          <label className={styles.selectRow}>
-            First post
-            <select disabled value={hourLabel(firstHour)}>
-              <option>{hourLabel(firstHour)}</option>
-            </select>
-          </label>
-        </section>
-
-        <section className={styles.card} aria-labelledby="nudges-title">
-          <div className={styles.cardHeader}>
-            <h2 className={styles.sectionTitle} id="nudges-title">
-              Nudges
-            </h2>
-            <span className={styles.note}>Editable in the next build.</span>
-          </div>
-          <ToggleRow label="Review reminders" checked />
-          <ToggleRow label="Runway warnings" checked />
-          <div className={styles.controlRow}>
-            <span>Runway threshold</span>
-            <div className={styles.stepper} aria-label="Runway threshold">
-              <button disabled type="button">
-                -
-              </button>
-              <span>2 days</span>
-              <button disabled type="button">
-                +
-              </button>
-            </div>
-          </div>
-          <ToggleRow label="Post-time nudges" checked />
-        </section>
+        <RhythmControls
+          initialSettings={overview.schedule ?? DEFAULT_SCHEDULE_SETTINGS}
+        />
 
         <section className={styles.accountCard} aria-labelledby="account-title">
           <h2 className={styles.sectionTitle} id="account-title">
@@ -124,24 +72,6 @@ export default async function RhythmPage() {
       </section>
     </AppShell>
   );
-}
-
-function ToggleRow({ label, checked }: { label: string; checked: boolean }) {
-  return (
-    <label className={styles.toggleRow}>
-      <span>{label}</span>
-      <input checked={checked} disabled readOnly type="checkbox" />
-    </label>
-  );
-}
-
-function cadenceSentence(slotsPerDay: number, firstHour: number): string {
-  const unit = slotsPerDay === 1 ? "post" : "posts";
-  return `${slotsPerDay} ${unit} a day, first at ${hourLabel(firstHour)}.`;
-}
-
-function hourLabel(hour: number): string {
-  return `${String(hour).padStart(2, "0")}:00`;
 }
 
 async function logoutCreator() {

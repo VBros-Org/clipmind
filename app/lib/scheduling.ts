@@ -1,8 +1,14 @@
-export const SCHEDULE_ANCHOR_HOUR_UTC = 9;
+import {
+  DEFAULT_ANCHOR_HOUR,
+  MAX_ANCHOR_HOUR,
+  MAX_SLOTS_PER_DAY,
+  MIN_ANCHOR_HOUR,
+  MIN_SLOTS_PER_DAY,
+} from "./schedule-settings";
+
+export const SCHEDULE_ANCHOR_HOUR_UTC = DEFAULT_ANCHOR_HOUR;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const MIN_SLOTS_PER_DAY = 1;
-const MAX_SLOTS_PER_DAY = 24;
 
 export type ClipSchedulingStatus =
   | "candidate"
@@ -34,6 +40,7 @@ export interface SchedulingHistoryClip {
 
 export interface SchedulingCadence {
   slotsPerDay: number;
+  anchorHour?: number | null;
   lastScheduledAt?: Date | null;
 }
 
@@ -143,13 +150,15 @@ export function pickNextClip(
 }
 
 // Cadence is UTC and intentionally simple for T6:
-// slotsPerDay creates evenly spaced slots from a fixed 09:00 UTC anchor.
+// slotsPerDay creates evenly spaced slots from the creator's anchor hour.
 export function computeNextSlot(
   schedule: SchedulingCadence,
   now: Date,
 ): Date {
   assertValidDate(now, "now");
   validateSlotsPerDay(schedule.slotsPerDay);
+  const anchorHour = schedule.anchorHour ?? DEFAULT_ANCHOR_HOUR;
+  validateAnchorHour(anchorHour);
 
   const lastScheduledAt = schedule.lastScheduledAt ?? null;
   if (lastScheduledAt) {
@@ -164,7 +173,7 @@ export function computeNextSlot(
   const cursorMs = lastScheduledAt
     ? Math.max(now.getTime(), lastScheduledAt.getTime() + 1)
     : now.getTime();
-  const anchorMs = Date.UTC(1970, 0, 1, SCHEDULE_ANCHOR_HOUR_UTC);
+  const anchorMs = Date.UTC(1970, 0, 1, anchorHour);
   const slotsSinceAnchor = Math.ceil((cursorMs - anchorMs) / intervalMs);
 
   return new Date(anchorMs + slotsSinceAnchor * intervalMs);
@@ -218,6 +227,18 @@ function validateSlotsPerDay(slotsPerDay: number): void {
   ) {
     throw new Error(
       `slotsPerDay must be an integer from ${MIN_SLOTS_PER_DAY} to ${MAX_SLOTS_PER_DAY}.`,
+    );
+  }
+}
+
+function validateAnchorHour(anchorHour: number): void {
+  if (
+    !Number.isInteger(anchorHour) ||
+    anchorHour < MIN_ANCHOR_HOUR ||
+    anchorHour > MAX_ANCHOR_HOUR
+  ) {
+    throw new Error(
+      `anchorHour must be an integer from ${MIN_ANCHOR_HOUR} to ${MAX_ANCHOR_HOUR}.`,
     );
   }
 }

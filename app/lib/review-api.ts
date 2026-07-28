@@ -9,6 +9,7 @@ import {
   startRenderAfterAccept,
 } from "./review";
 import type { renderClip } from "./render";
+import { runSchedulePass } from "./scheduling-repository";
 import type { R2Storage } from "./storage";
 
 type RouteParams = { id: string } | Promise<{ id: string }>;
@@ -79,6 +80,15 @@ export async function handleAcceptClip(
       return json({ error: "Clip not found." }, 404);
     }
 
+    const schedulePass = await runSchedulePass(session.creatorId, new Date(), {
+      prismaClient: options.prismaClient,
+    });
+    const scheduledClip = await loadClipAfterSchedulePass(
+      session.creatorId,
+      result.clip.id,
+      options,
+    );
+
     startRenderAfterAccept(
       result.clip.id,
       result.presetId,
@@ -87,14 +97,23 @@ export async function handleAcceptClip(
 
     return json(
       {
-        clip: serializeClip(result.clip),
+        clip: serializeClip(scheduledClip ?? result.clip),
         rendering: true,
+        scheduledCount: schedulePass.scheduled.length,
       },
       200,
     );
   } catch (error) {
     return transitionErrorResponse(error);
   }
+}
+
+async function loadClipAfterSchedulePass(
+  creatorId: string,
+  clipIdValue: string,
+  options: ReviewApiOptions,
+) {
+  return loadReviewClip(creatorId, clipIdValue, options);
 }
 
 export async function handleRejectClip(

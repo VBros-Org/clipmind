@@ -80,3 +80,32 @@ test("selectHomeNudges skips inactive rules", () => {
 
   assert.deepEqual(nudges, []);
 });
+
+test("selectHomeNudges respects nudge toggles and runway threshold", () => {
+  assert.deepEqual(
+    selectHomeNudges({
+      reviewCount: 4,
+      runway: computeRunway(1, { slotsPerDay: 2 }),
+      dueClip: {
+        clipId: "clip-1",
+        timeLabel: "10:00",
+        isDue: true,
+      },
+      reviewReminders: false,
+      runwayWarnings: false,
+      postTimeNudges: false,
+    }),
+    [],
+  );
+
+  const nudges = selectHomeNudges({
+    reviewCount: 0,
+    runway: computeRunway(7, { slotsPerDay: 2 }),
+    dueClip: null,
+    runwayWarningThresholdDays: 4,
+  });
+
+  assert.equal(nudges.length, 1);
+  assert.equal(nudges[0]?.kind, "runway");
+  assert.equal(nudges[0]?.title, "Runway under 4 days. Upload something long.");
+});

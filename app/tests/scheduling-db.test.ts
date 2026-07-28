@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { prisma } from "../lib/db";
 import {
   markPosted,
+  runSchedulePass,
   scheduleTick,
   type ScheduleTickResult,
 } from "../lib/scheduling-repository";
@@ -153,6 +154,64 @@ async function main() {
       "2026-07-27T09:30:00.000Z",
     );
 
+    const passClipA = await prisma.clip.create({
+      data: {
+        creatorId: creator.id,
+        videoId: videoA.id,
+        startMs: 30_000,
+        endMs: 40_000,
+        status: "accepted",
+        createdAt: date("2026-07-27T00:05:00.000Z"),
+      },
+    });
+    const passClipB = await prisma.clip.create({
+      data: {
+        creatorId: creator.id,
+        videoId: videoB.id,
+        startMs: 31_000,
+        endMs: 41_000,
+        status: "accepted",
+        createdAt: date("2026-07-27T00:06:00.000Z"),
+      },
+    });
+
+    const passResult = await runSchedulePass(
+      creator.id,
+      date("2026-07-28T04:00:00.000Z"),
+    );
+    assert.equal(passResult.status, "done");
+    assert.equal(passResult.scheduled.length, 2);
+
+    const rerunResult = await runSchedulePass(
+      creator.id,
+      date("2026-07-28T04:01:00.000Z"),
+    );
+    assert.equal(rerunResult.status, "done");
+    assert.equal(rerunResult.scheduled.length, 0);
+
+    const passClips = await prisma.clip.findMany({
+      where: {
+        id: {
+          in: [passClipA.id, passClipB.id],
+        },
+      },
+      orderBy: {
+        scheduledFor: "asc",
+      },
+      select: {
+        status: true,
+        scheduledFor: true,
+      },
+    });
+    assert.deepEqual(
+      passClips.map((clip) => clip.status),
+      ["scheduled", "scheduled"],
+    );
+    assert.deepEqual(
+      passClips.map((clip) => clip.scheduledFor?.toISOString()),
+      ["2026-07-28T09:00:00.000Z", "2026-07-28T15:00:00.000Z"],
+    );
+
     console.log(
       [
         "PASSED scheduling DB tests",
@@ -165,6 +224,7 @@ async function main() {
           .join(",")}`,
         `postedClip=${posted.clipId}`,
         `postedAt=${posted.postedAt.toISOString()}`,
+        `passScheduled=${passResult.scheduled.length}`,
       ].join(" "),
     );
   } catch (error) {
