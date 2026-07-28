@@ -35,6 +35,9 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   colorScheme: "dark",
   themeColor: "#0d1117",
+  // Installed PWAs draw full-bleed on iOS; without viewport-fit=cover every
+  // env(safe-area-inset-*) is 0 and fixed bars sit under the home indicator.
+  viewportFit: "cover",
 };
 
 export default function RootLayout({
