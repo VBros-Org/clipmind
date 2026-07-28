@@ -182,5 +182,8 @@ function recordingMindsClient(
       state.verifiedMindId = value;
       return verifyTenetsReply;
     },
+    async sendMessageAndWaitForReply() {
+      throw new Error("onboarding tests should use addTenets and verifyTenets.");
+    },
   } satisfies MindsClient);
 }
