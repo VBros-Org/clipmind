@@ -64,7 +64,7 @@ test("selectHomeNudges returns review runway and due-post cards", () => {
     nudges[2].title,
     "Clip scheduled for 10:00 is ready. Post it now.",
   );
-  assert.equal(nudges[2].href, "/review?clip=clip-1");
+  assert.equal(nudges[2].href, "/home?post=clip-1");
 });
 
 test("selectHomeNudges skips inactive rules", () => {

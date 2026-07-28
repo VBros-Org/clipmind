@@ -85,7 +85,7 @@ export interface MindsMessagingClientLike {
 }
 
 export function createMindsClientFromEnv(
-  env = process.env,
+  env: Record<string, string | undefined> = process.env,
   fetchImpl: MindsFetchLike = fetch,
   messagingClientFactory: MindsMessagingClientFactory = createMessagingClient,
 ): MindsClient | null {

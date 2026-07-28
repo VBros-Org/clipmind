@@ -23,7 +23,11 @@ from starlette.responses import FileResponse
 from .candidates import build_candidates
 from .config import get_settings
 from .presets import CaptionPreset, get_caption_preset, validate_caption_presets
-from .render import cut_segment_for_transcription, render_cut_with_subtitles
+from .render import (
+    cut_segment_for_transcription,
+    render_cut_with_subtitles,
+    render_thumbnail_frame,
+)
 from .subtitles import transcript_for_cut, transcript_from_payload
 from .transcribe import Transcript, probe_video_duration_ms, transcribe_video
 
@@ -57,6 +61,12 @@ class CutRequest:
     @property
     def effective_end_ms(self) -> int:
         return self.end_ms - self.trim_end_ms
+
+
+@dataclass(frozen=True)
+class ThumbnailRequest:
+    video_path: Path
+    timestamp_ms: int
 
 
 @app.get("/health")
@@ -188,6 +198,44 @@ async def cut_clip(
             headers={
                 "X-ClipMind-Duration-Ms": str(duration_ms),
                 "X-ClipMind-Preset-Id": cut_request.preset.preset_id,
+            },
+            background=BackgroundTask(shutil.rmtree, temp_dir, ignore_errors=True),
+        )
+    except Exception:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
+
+
+@app.post("/thumbnail")
+async def thumbnail(
+    request: Request,
+    _: None = Depends(_require_service_token),
+) -> FileResponse:
+    raw_temp_dir = tempfile.mkdtemp(prefix="clipmind-thumbnail-")
+    temp_dir = Path(raw_temp_dir)
+
+    try:
+        thumbnail_request = await _parse_thumbnail_request(request, temp_dir)
+        source_duration_ms = probe_video_duration_ms(thumbnail_request.video_path)
+        if thumbnail_request.timestamp_ms >= source_duration_ms:
+            raise HTTPException(
+                status_code=422,
+                detail="timestamp_ms is outside the source video duration.",
+            )
+
+        output_path = temp_dir / "clipmind-thumbnail.jpg"
+        render_thumbnail_frame(
+            thumbnail_request.video_path,
+            output_path,
+            thumbnail_request.timestamp_ms,
+        )
+
+        return FileResponse(
+            output_path,
+            media_type="image/jpeg",
+            filename="clipmind-thumbnail.jpg",
+            headers={
+                "X-ClipMind-Timestamp-Ms": str(thumbnail_request.timestamp_ms),
             },
             background=BackgroundTask(shutil.rmtree, temp_dir, ignore_errors=True),
         )
@@ -328,6 +376,37 @@ async def _parse_cut_request(request: Request, temp_dir: Path) -> CutRequest:
         trim_end_ms=trim_end_ms,
         transcript_payload=transcript_payload,
     )
+
+
+async def _parse_thumbnail_request(request: Request, temp_dir: Path) -> ThumbnailRequest:
+    content_type = request.headers.get("content-type", "").lower()
+
+    if content_type.startswith("multipart/form-data"):
+        form = await request.form()
+        upload = form.get("file")
+        if not isinstance(upload, UploadFile):
+            raise HTTPException(status_code=422, detail="multipart field file is required.")
+        timestamp_ms = _required_int(form, "timestamp_ms")
+        video_path = await _save_upload_file(upload, temp_dir, "upload")
+    elif content_type.startswith("application/json"):
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=422, detail="JSON body must be an object.")
+        raw_source_url = body.get("source_url") or body.get("url")
+        if not isinstance(raw_source_url, str) or not raw_source_url.strip():
+            raise HTTPException(status_code=422, detail="source_url is required.")
+        timestamp_ms = _required_int(body, "timestamp_ms")
+        video_path = _download_source_url(raw_source_url.strip(), temp_dir)
+    else:
+        raise HTTPException(
+            status_code=415,
+            detail="Send multipart/form-data with file, or JSON with source_url.",
+        )
+
+    if timestamp_ms < 0:
+        raise HTTPException(status_code=422, detail="timestamp_ms must be non-negative.")
+
+    return ThumbnailRequest(video_path=video_path, timestamp_ms=timestamp_ms)
 
 
 def _transcript_from_form(form: Mapping[str, Any]) -> object | None:

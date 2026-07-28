@@ -1,0 +1,1 @@
+ALTER TABLE "Clip" ADD COLUMN "thumbKey" TEXT;

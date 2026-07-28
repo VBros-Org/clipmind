@@ -9,7 +9,7 @@ import {
   startRenderAfterAccept,
 } from "./review";
 import type { renderClip } from "./render";
-import { runSchedulePass } from "./scheduling-repository";
+import { markPostedForCreator, runSchedulePass } from "./scheduling-repository";
 import type { R2Storage } from "./storage";
 
 type RouteParams = { id: string } | Promise<{ id: string }>;
@@ -17,6 +17,7 @@ type RouteParams = { id: string } | Promise<{ id: string }>;
 type ReviewApiOptions = {
   prismaClient?: PrismaClient;
   renderClipImpl?: typeof renderClip;
+  now?: Date;
   storage?: Pick<R2Storage, "presignSourceUrl">;
 };
 
@@ -142,6 +143,45 @@ export async function handleRejectClip(
   }
 }
 
+export async function handleMarkClipPosted(
+  request: Request,
+  params: RouteParams,
+  options: ReviewApiOptions = {},
+): Promise<Response> {
+  const session = await loadCreatorSession(request, options);
+  if (!session) {
+    return json({ error: "Login required." }, 401);
+  }
+
+  try {
+    const result = await markPostedForCreator(
+      session.creatorId,
+      await clipId(params),
+      options.now ?? new Date(),
+      {
+        prismaClient: options.prismaClient,
+      },
+    );
+    if (!result) {
+      return json({ error: "Clip not found." }, 404);
+    }
+
+    return json(
+      {
+        status: result.status,
+        clipId: result.clipId,
+        creatorId: result.creatorId,
+        videoId: result.videoId,
+        scheduledFor: result.scheduledFor?.toISOString() ?? null,
+        postedAt: result.postedAt.toISOString(),
+      },
+      200,
+    );
+  } catch (error) {
+    return transitionErrorResponse(error);
+  }
+}
+
 async function loadCreatorSession(
   request: Request,
   options: ReviewApiOptions,
@@ -174,6 +214,7 @@ function serializeClip(clip: {
   startMs: number;
   endMs: number;
   renderedUrl: string | null;
+  thumbUrl: string | null;
   postCopyVariants: unknown;
   transcript: string | null;
   mindRank: number | null;
@@ -187,6 +228,7 @@ function serializeClip(clip: {
     startMs: clip.startMs,
     endMs: clip.endMs,
     renderedUrl: clip.renderedUrl,
+    thumbUrl: clip.thumbUrl,
     postCopyVariants: clip.postCopyVariants,
     transcript: clip.transcript,
     mindRank: clip.mindRank,

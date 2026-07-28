@@ -5,10 +5,21 @@ import { AppShell } from "../AppShell";
 import { requireCreatorSession } from "../app-session";
 
 import { HomeNudges } from "./HomeNudges";
+import {
+  ReadyToPostRow,
+  type ReadyToPostClipView,
+} from "./ReadyToPostRow";
 import styles from "./home.module.css";
 
-export default async function HomePage() {
+type HomePageProps = {
+  searchParams?: Promise<{
+    post?: string;
+  }>;
+};
+
+export default async function HomePage({ searchParams }: HomePageProps) {
   const session = await requireCreatorSession();
+  const params = (await searchParams) ?? {};
   const overview = await loadHomeOverview(session.creatorId);
 
   return (
@@ -17,9 +28,13 @@ export default async function HomePage() {
         <RunwayHero runway={overview.runway} />
         {overview.nextUp ? <NextUpCard nextUp={overview.nextUp} /> : null}
         <HomeNudges nudges={overview.nudges} />
+        <ReadyToPostRow
+          clips={overview.readyToPost.map(serializeReadyClip)}
+          initialClipId={params.post ?? null}
+        />
         <footer className={styles.stats} aria-label="Clip stats">
-          <span>{overview.stats.totalPosted} posted</span>
-          <span>{overview.stats.totalClipsMade} clips made</span>
+          <span>{formatClipStat(overview.stats.totalPosted, "posted")}</span>
+          <span>{formatClipStat(overview.stats.totalClipsMade, "made")}</span>
         </footer>
       </section>
     </AppShell>
@@ -77,14 +92,8 @@ function NextUpCard({
   return (
     <section className={styles.nextUp} aria-labelledby="next-up-title">
       <div className={styles.nextThumb} aria-hidden="true">
-        {nextUp.renderedUrl ? (
-          <video
-            className={styles.nextVideo}
-            muted
-            playsInline
-            preload="metadata"
-            src={nextUp.renderedUrl}
-          />
+        {nextUp.thumbUrl ? (
+          <img alt="" className={styles.nextImage} src={nextUp.thumbUrl} />
         ) : (
           <div className={styles.poster}>Scheduled</div>
         )}
@@ -106,6 +115,20 @@ function NextUpCard({
       </div>
     </section>
   );
+}
+
+function serializeReadyClip(
+  clip: Awaited<ReturnType<typeof loadHomeOverview>>["readyToPost"][number],
+): ReadyToPostClipView {
+  return {
+    id: clip.id,
+    videoId: clip.videoId,
+    renderedUrl: clip.renderedUrl,
+    thumbUrl: clip.thumbUrl,
+    scheduledForIso: clip.scheduledForIso,
+    postCopyVariants: clip.postCopyVariants,
+    label: clip.label,
+  };
 }
 
 function formatRunwayDays(days: number): string {
@@ -131,4 +154,8 @@ function formatScheduledTime(value: string): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+function formatClipStat(count: number, verb: "posted" | "made"): string {
+  return `${count} ${count === 1 ? "clip" : "clips"} ${verb}`;
 }

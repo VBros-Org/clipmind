@@ -11,6 +11,8 @@ from .transcribe import Transcript
 
 OUTPUT_WIDTH = 1080
 OUTPUT_HEIGHT = 1920
+THUMBNAIL_WIDTH = 540
+THUMBNAIL_HEIGHT = 960
 
 
 def cut_segment_for_transcription(
@@ -114,6 +116,46 @@ def render_cut_with_subtitles(
             str(output_path),
         ],
         "ffmpeg clip render",
+    )
+
+
+def render_thumbnail_frame(
+    source_path: Path,
+    output_path: Path,
+    timestamp_ms: int,
+    width: int = THUMBNAIL_WIDTH,
+    height: int = THUMBNAIL_HEIGHT,
+) -> None:
+    video_filter = ",".join(
+        [
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease",
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2",
+            "setsar=1",
+        ]
+    )
+
+    _run_checked(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-ss",
+            _seconds_arg(timestamp_ms),
+            "-i",
+            str(source_path),
+            "-frames:v",
+            "1",
+            "-map",
+            "0:v:0",
+            "-vf",
+            video_filter,
+            "-q:v",
+            "3",
+            str(output_path),
+        ],
+        "ffmpeg thumbnail render",
     )
 
 

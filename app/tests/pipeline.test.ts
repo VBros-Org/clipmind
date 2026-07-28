@@ -7,6 +7,10 @@ import {
   runPipeline,
   type PipelineStage,
 } from "../lib/pipeline";
+import type {
+  GenerateClipThumbnailOptions,
+  GenerateClipThumbnailResult,
+} from "../lib/thumbnails";
 import type { ClipServiceClient } from "../lib/ingest";
 import type { R2Storage } from "../lib/storage";
 
@@ -27,6 +31,7 @@ test("runPipeline progresses uploaded video through ingest, ranking, top-two cap
     captionReply("First top clip"),
     captionReply("Second top clip"),
   ]);
+  const thumbnailCalls: string[] = [];
 
   try {
     const result = await runPipeline(fixture.videoId, {
@@ -38,6 +43,7 @@ test("runPipeline progresses uploaded video through ingest, ranking, top-two cap
       captionOptions: {
         mindsClient,
       },
+      generateClipThumbnailImpl: fakeThumbnailImpl(thumbnailCalls),
       onStageChange(stage) {
         transitions.push(stage);
       },
@@ -69,9 +75,11 @@ test("runPipeline progresses uploaded video through ingest, ranking, top-two cap
     assert.equal(video.pipelineError, null);
     assert.equal(video.status, "clipped");
     assert.equal(video.clips.length, 3);
+    assert.equal(thumbnailCalls.length, 3);
     assert.equal(video.clips[0]?.mindRank, 1);
     assert.equal(video.clips[0]?.transcript, "Wait for the turn.");
     assert.equal(video.clips[0]?.postCopy, "First top clip for TikTok #clipmind");
+    assert.equal(video.clips[0]?.thumbKey?.startsWith("thumbs/"), true);
     assert.equal(video.clips[1]?.mindRank, 2);
     assert.equal(video.clips[1]?.postCopy, "Second top clip for TikTok #clipmind");
     assert.equal(video.clips[2]?.mindRank, 3);
@@ -122,6 +130,7 @@ test("runPipeline triggers scheduling after the pipeline reaches done", async ()
       captionOptions: {
         mindsClient,
       },
+      generateClipThumbnailImpl: fakeThumbnailImpl(),
     });
     assert.equal(result.status, "done");
 
@@ -159,6 +168,7 @@ test("runPipeline stores a short named failure for every retryable stage", async
               },
             },
           },
+          generateClipThumbnailImpl: fakeThumbnailImpl(),
         });
       },
     },
@@ -175,6 +185,7 @@ test("runPipeline stores a short named failure for every retryable stage", async
               },
             },
           },
+          generateClipThumbnailImpl: fakeThumbnailImpl(),
         });
       },
     },
@@ -191,6 +202,7 @@ test("runPipeline stores a short named failure for every retryable stage", async
           rankOptions: {
             mindsClient,
           },
+          generateClipThumbnailImpl: fakeThumbnailImpl(),
         });
       },
     },
@@ -211,6 +223,7 @@ test("runPipeline stores a short named failure for every retryable stage", async
           captionOptions: {
             mindsClient,
           },
+          generateClipThumbnailImpl: fakeThumbnailImpl(),
         });
       },
     },
@@ -287,6 +300,9 @@ test("retryPipeline resumes from the failed stage without re-ingesting earlier s
       captionOptions: {
         mindsClient,
       },
+      generateClipThumbnailImpl: async () => {
+        throw new Error("Retry from ranking should not generate thumbnails.");
+      },
       onStageChange(stage) {
         transitions.push(stage);
       },
@@ -300,10 +316,95 @@ test("retryPipeline resumes from the failed stage without re-ingesting earlier s
   }
 });
 
+test("runPipeline logs thumbnail failures and continues", async () => {
+  const fixture = await createPipelineFixture();
+  const warnings: string[] = [];
+  const mindsClient = scriptedMindsClient([
+    JSON.stringify([{ index: 1, reason: "Best despite thumb failure." }]),
+    captionReply("Caption after thumb failure"),
+    captionReply("Second caption after thumb failure"),
+  ]);
+
+  try {
+    const result = await runPipeline(fixture.videoId, {
+      prismaClient: prisma,
+      ingestOptions: fakeIngestOptions(fixture.videoId),
+      rankOptions: {
+        mindsClient,
+      },
+      captionOptions: {
+        mindsClient,
+      },
+      generateClipThumbnailImpl: async (clipId) => {
+        throw new Error(`thumb failed for ${clipId}`);
+      },
+      thumbnailLogger: {
+        warn(message) {
+          warnings.push(message);
+        },
+      },
+    });
+
+    assert.equal(result.status, "done");
+    assert.equal(warnings.length, 3);
+    assert.equal(
+      warnings.every((warning) =>
+        warning.startsWith("Thumbnail generation failed for clip "),
+      ),
+      true,
+    );
+
+    const video = await prisma.video.findUniqueOrThrow({
+      where: {
+        id: fixture.videoId,
+      },
+      select: {
+        pipelineStage: true,
+        pipelineError: true,
+      },
+    });
+    assert.equal(video.pipelineStage, "done");
+    assert.equal(video.pipelineError, null);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
 function fakeIngestOptions(videoId: string) {
   return {
     storage: fakeStorage(videoId),
     clipServiceClient: fakeClipServiceClient(),
+  };
+}
+
+function fakeThumbnailImpl(
+  calls: string[] = [],
+): (
+  clipId: string,
+  options?: GenerateClipThumbnailOptions,
+) => Promise<GenerateClipThumbnailResult> {
+  return async (clipId, options) => {
+    calls.push(clipId);
+    const db = options?.prismaClient ?? prisma;
+    const clip = await db.clip.update({
+      where: {
+        id: clipId,
+      },
+      data: {
+        thumbKey: `thumbs/${clipId}.jpg`,
+      },
+      select: {
+        videoId: true,
+      },
+    });
+
+    return {
+      status: "generated",
+      clipId,
+      videoId: clip.videoId,
+      thumbKey: `thumbs/${clipId}.jpg`,
+      thumbUrl: `https://cdn.example/thumbs/${clipId}.jpg`,
+    };
   };
 }
 

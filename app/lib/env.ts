@@ -39,7 +39,9 @@ export const env = {
   OPENAI_DISTILL_MODEL: process.env.OPENAI_DISTILL_MODEL,
 };
 
-export function requireStorageEnv(source = process.env): StorageEnv {
+export function requireStorageEnv(
+  source: Record<string, string | undefined> = process.env,
+): StorageEnv {
   const values = {
     R2_ACCOUNT_ID: clean(source.R2_ACCOUNT_ID),
     R2_ACCESS_KEY_ID: clean(source.R2_ACCESS_KEY_ID),

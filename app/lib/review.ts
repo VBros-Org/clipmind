@@ -7,7 +7,7 @@ import {
   toClipSchedulingStatus,
   type ClipSchedulingStatus,
 } from "./scheduling";
-import { createR2Storage, type R2Storage } from "./storage";
+import { createR2Storage, publicMediaUrlForKey, type R2Storage } from "./storage";
 import type { PostCopyVariants } from "./captioning";
 
 export const DEFAULT_CAPTION_PRESET = "clean-bold";
@@ -37,6 +37,7 @@ export type ReviewClip = {
   startMs: number;
   endMs: number;
   renderedUrl: string | null;
+  thumbUrl: string | null;
   postCopyVariants: PostCopyVariants | null;
   transcript: string | null;
   mindRank: number | null;
@@ -163,6 +164,7 @@ export async function loadReviewVideo(
           startMs: true,
           endMs: true,
           renderedUrl: true,
+          thumbKey: true,
           postCopyVariants: true,
           transcript: true,
           mindRank: true,
@@ -270,6 +272,7 @@ export async function loadReviewClip(
       startMs: true,
       endMs: true,
       renderedUrl: true,
+      thumbKey: true,
       postCopyVariants: true,
       transcript: true,
       mindRank: true,
@@ -483,6 +486,7 @@ const reviewClipSelect = {
   startMs: true,
   endMs: true,
   renderedUrl: true,
+  thumbKey: true,
   postCopyVariants: true,
   transcript: true,
   mindRank: true,
@@ -497,6 +501,7 @@ function toReviewClip(clip: {
   startMs: number;
   endMs: number;
   renderedUrl: string | null;
+  thumbKey: string | null;
   postCopyVariants: Prisma.JsonValue;
   transcript: string | null;
   mindRank: number | null;
@@ -510,6 +515,7 @@ function toReviewClip(clip: {
     startMs: clip.startMs,
     endMs: clip.endMs,
     renderedUrl: clip.renderedUrl,
+    thumbUrl: publicMediaUrlForKey(clip.thumbKey),
     postCopyVariants: toPostCopyVariants(clip.postCopyVariants),
     transcript: clip.transcript,
     mindRank: clip.mindRank,
@@ -576,6 +582,7 @@ function toReviewVideoGroup(video: {
     startMs: number;
     endMs: number;
     renderedUrl: string | null;
+    thumbKey: string | null;
     postCopyVariants: Prisma.JsonValue;
     transcript: string | null;
     mindRank: number | null;

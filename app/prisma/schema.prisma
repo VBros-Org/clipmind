@@ -56,6 +56,7 @@ model Clip {
   trimStartMs      Int? // in-app top/tail trim
   trimEndMs        Int?
   renderedUrl      String? // clip with baked-in subtitles
+  thumbKey         String? // media bucket key for static JPEG poster
   postCopy         String? // legacy default post-copy; mirrors postCopyVariants.tiktok
   postCopyVariants Json? // post-copy variants: { youtube, tiktok, instagram }
   transcript       String?
