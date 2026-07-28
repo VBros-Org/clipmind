@@ -15,3 +15,6 @@ Do not put reliability-critical control flow in the Mind. See [`../AGENTS.md`](.
 2. `npm install`
 3. `npx prisma migrate dev` to create the schema.
 4. `npm run dev`
+
+## PWA icons
+The source icon lives at `public/icons/clipmind-icon.svg`. The checked-in PNG icons are generated with `npm run icons:pwa`, which uses the `sharp` package already installed with the app toolchain.
