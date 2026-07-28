@@ -43,23 +43,25 @@ enum ClipStatus {
 }
 
 model Clip {
-  id           String     @id @default(cuid())
-  videoId      String
-  video        Video      @relation(fields: [videoId], references: [id])
-  creatorId    String
-  creator      Creator    @relation(fields: [creatorId], references: [id])
-  startMs      Int
-  endMs        Int
-  trimStartMs  Int? // in-app top/tail trim
-  trimEndMs    Int?
-  renderedUrl  String? // clip with baked-in subtitles
-  postCopy     String? // platform caption (voice + SEO), written by the Mind
-  transcript   String?
-  reasons      Json?
-  status       ClipStatus @default(candidate)
-  scheduledFor DateTime?
-  postedAt     DateTime?
-  createdAt    DateTime   @default(now())
+  id             String     @id @default(cuid())
+  videoId        String
+  video          Video      @relation(fields: [videoId], references: [id])
+  creatorId      String
+  creator        Creator    @relation(fields: [creatorId], references: [id])
+  startMs        Int
+  endMs          Int
+  trimStartMs    Int? // in-app top/tail trim
+  trimEndMs      Int?
+  renderedUrl    String? // clip with baked-in subtitles
+  postCopy       String? // platform caption (voice + SEO), written by the Mind
+  transcript     String?
+  reasons        Json?
+  mindRank       Int? // Mind ranking metadata only, 1 = best
+  mindRankReason String?
+  status         ClipStatus @default(candidate)
+  scheduledFor   DateTime?
+  postedAt       DateTime?
+  createdAt      DateTime   @default(now())
 }
 
 model Schedule {

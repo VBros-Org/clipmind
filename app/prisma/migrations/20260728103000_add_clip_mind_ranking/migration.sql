@@ -1,0 +1,3 @@
+ALTER TABLE "Clip"
+ADD COLUMN "mindRank" INTEGER,
+ADD COLUMN "mindRankReason" TEXT;

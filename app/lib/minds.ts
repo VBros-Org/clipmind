@@ -35,7 +35,15 @@ export interface MindsClient {
   createMind(name: string, stewardEmail: string): Promise<MindCreationResult>;
   addTenets(mindId: string, tenets: InitialTenets): Promise<void>;
   verifyTenets(mindId: string): Promise<string>;
+  sendMessageAndWaitForReply(args: MindMessageRequest): Promise<string>;
 }
+
+export type MindMessageRequest = {
+  mindId: string;
+  alias: string;
+  messageText: string;
+  action: string;
+};
 
 export type MindsFetchLike = (
   input: string,
@@ -143,14 +151,10 @@ class BuilderApiMindsClient implements MindsClient {
     const alias = buildConversationAlias(TENET_SEED_ALIAS_PREFIX, mindId);
     const messageText = buildTenetSeedMessage(tenets);
 
-    await this.messagingClient.ensureConversation(alias, mindId);
-    const afterFingerprint =
-      await this.messagingClient.getLatestHistoryFingerprint(alias);
-    await this.messagingClient.sendMessage({ alias, messageText });
-    await this.waitForMindReply({
+    await this.sendMessageAndWaitForReply({
+      mindId,
       alias,
       messageText,
-      afterFingerprint,
       action: "Tenet seed",
     });
   }
@@ -159,16 +163,30 @@ class BuilderApiMindsClient implements MindsClient {
     const alias = buildConversationAlias(TENET_VERIFY_ALIAS_PREFIX, mindId);
     const messageText = buildTenetVerificationMessage();
 
-    await this.messagingClient.ensureConversation(alias, mindId);
-    const afterFingerprint =
-      await this.messagingClient.getLatestHistoryFingerprint(alias);
-    await this.messagingClient.sendMessage({ alias, messageText });
-
-    return this.waitForMindReply({
+    return this.sendMessageAndWaitForReply({
+      mindId,
       alias,
       messageText,
-      afterFingerprint,
       action: "Tenet verification",
+    });
+  }
+
+  async sendMessageAndWaitForReply(
+    args: MindMessageRequest,
+  ): Promise<string> {
+    await this.messagingClient.ensureConversation(args.alias, args.mindId);
+    const afterFingerprint =
+      await this.messagingClient.getLatestHistoryFingerprint(args.alias);
+    await this.messagingClient.sendMessage({
+      alias: args.alias,
+      messageText: args.messageText,
+    });
+
+    return this.waitForMindReply({
+      alias: args.alias,
+      messageText: args.messageText,
+      afterFingerprint,
+      action: args.action,
     });
   }
 
