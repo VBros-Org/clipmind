@@ -41,7 +41,7 @@
     "pretest:scheduling": "prisma generate",
     "test:scheduling": "tsc -p tsconfig.scripts.json && node --test dist/tests/scheduling.test.js dist/tests/home-rules.test.js",
     "test:scheduling:db": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env dist/tests/scheduling-db.test.js",
-    "test:review": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env --test dist/tests/review-api.test.js",
+    "test:review": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env --test dist/tests/review-api.test.js dist/tests/schedule-api.test.js",
     "test:pipeline": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env --test dist/tests/pipeline.test.js dist/tests/video-api.test.js"
   },
   "engines": {

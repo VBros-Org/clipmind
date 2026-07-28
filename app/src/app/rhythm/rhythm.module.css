@@ -50,12 +50,6 @@
   line-height: var(--cm-line-numeral);
 }
 
-.note {
-  color: var(--cm-text-muted);
-  font-size: var(--cm-font-label);
-  font-weight: 800;
-}
-
 .preview {
   margin: 0;
   color: var(--cm-text);
@@ -86,12 +80,13 @@
   border: 0;
   background: transparent;
   color: var(--cm-text);
+  cursor: pointer;
   font-weight: 900;
 }
 
 .stepper {
   display: inline-grid;
-  grid-template-columns: var(--cm-touch-target) auto var(--cm-touch-target);
+  grid-template-columns: var(--cm-touch-target) minmax(4.5rem, auto) var(--cm-touch-target);
   align-items: center;
   overflow: hidden;
   border: var(--cm-border-width) solid var(--cm-border);
@@ -112,12 +107,46 @@
 .stepper button {
   border: 0;
   background: transparent;
+  cursor: pointer;
+}
+
+.stepper button:disabled {
+  color: var(--cm-text-faint);
+  cursor: not-allowed;
+}
+
+.toggleRow {
+  cursor: pointer;
 }
 
 .toggleRow input {
   width: var(--cm-space-5);
   height: var(--cm-space-5);
   accent-color: var(--cm-accent);
+  cursor: pointer;
+}
+
+.disabledRow {
+  opacity: 0.64;
+}
+
+.saveState {
+  display: inline-flex;
+  min-height: var(--cm-space-5);
+  align-items: center;
+  gap: var(--cm-space-1);
+  color: var(--cm-accent);
+  font-size: var(--cm-font-label);
+  font-weight: 900;
+}
+
+.errorState {
+  color: var(--cm-red);
+}
+
+.saveIcon {
+  width: var(--cm-space-4);
+  height: var(--cm-space-4);
 }
 
 .presetList {

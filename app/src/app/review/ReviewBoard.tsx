@@ -160,7 +160,7 @@ function ClipCard({
   clip: ReviewClipView;
   openClip: (clipId: string) => void;
 }) {
-  const isRendering = clip.status === "accepted" && !clip.renderedUrl;
+  const isRendering = isRenderPending(clip);
   const isRejected = clip.status === "rejected";
 
   return (
@@ -209,7 +209,7 @@ function ReviewSheet({
 }) {
   const [isBusy, setIsBusy] = useState(false);
   const [isRendering, setIsRendering] = useState(
-    clip.status === "accepted" && !clip.renderedUrl,
+    isRenderPending(clip),
   );
   const [copyState, setCopyState] = useState<Platform | null>(null);
   const [preview, setPreview] = useState<PreviewPayload | null>(null);
@@ -220,7 +220,7 @@ function ReviewSheet({
   const isPreview = !clip.renderedUrl && preview !== null;
 
   useEffect(() => {
-    setIsRendering(clip.status === "accepted" && !clip.renderedUrl);
+    setIsRendering(isRenderPending(clip));
     setCopyState(null);
   }, [clip.id, clip.renderedUrl, clip.status]);
 
@@ -540,4 +540,11 @@ function statusLabel(status: ClipStatus, isRendering: boolean): string {
   }
 
   return status;
+}
+
+function isRenderPending(clip: Pick<ReviewClipView, "status" | "renderedUrl">): boolean {
+  return (
+    (clip.status === "accepted" || clip.status === "scheduled") &&
+    !clip.renderedUrl
+  );
 }

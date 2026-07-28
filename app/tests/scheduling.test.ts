@@ -149,7 +149,7 @@ test("clip status transition guard accepts only the scheduling state machine pat
   }
 });
 
-test("computeNextSlot uses even UTC spacing from the fixed anchor", () => {
+test("computeNextSlot uses even UTC spacing from the schedule anchor", () => {
   assert.equal(
     computeNextSlot(
       { slotsPerDay: 4, lastScheduledAt: null },
@@ -184,13 +184,39 @@ test("computeNextSlot uses even UTC spacing from the fixed anchor", () => {
     ).toISOString(),
     "2026-07-27T21:00:00.000Z",
   );
+  assert.equal(
+    computeNextSlot(
+      { slotsPerDay: 2, anchorHour: 10, lastScheduledAt: null },
+      date("2026-07-27T09:59:59.999Z"),
+    ).toISOString(),
+    "2026-07-27T10:00:00.000Z",
+  );
+  assert.equal(
+    computeNextSlot(
+      {
+        slotsPerDay: 2,
+        anchorHour: 10,
+        lastScheduledAt: date("2026-07-27T10:00:00.000Z"),
+      },
+      date("2026-07-27T10:01:00.000Z"),
+    ).toISOString(),
+    "2026-07-27T22:00:00.000Z",
+  );
   assert.throws(
     () =>
       computeNextSlot(
         { slotsPerDay: 0, lastScheduledAt: null },
         date("2026-07-27T08:00:00.000Z"),
-      ),
+    ),
     /slotsPerDay/,
+  );
+  assert.throws(
+    () =>
+      computeNextSlot(
+        { slotsPerDay: 2, anchorHour: 24, lastScheduledAt: null },
+        date("2026-07-27T08:00:00.000Z"),
+      ),
+    /anchorHour/,
   );
 });
 

@@ -92,6 +92,56 @@ test("accept transitions candidate to accepted and starts one background render"
   }
 });
 
+test("accept triggers deterministic scheduling when rhythm exists", async () => {
+  const fixture = await createFixture();
+
+  try {
+    await prisma.schedule.create({
+      data: {
+        creatorId: fixture.creatorAId,
+        slots: [],
+        rotation: {},
+        slotsPerDay: 2,
+        anchorHour: 9,
+      },
+    });
+
+    const response = await handleAcceptClip(
+      requestWithCode(fixture.clipId, fixture.creatorACode, "POST"),
+      { id: fixture.clipId },
+      {
+        renderClipImpl: async (clipId) => ({
+          clipId,
+          videoId: "video-after-render",
+          renderedUrl: "https://cdn.example/rendered.mp4",
+        }),
+      },
+    );
+    assert.equal(response.status, 200);
+
+    const body = (await response.json()) as {
+      clip: { status: string };
+      scheduledCount: number;
+    };
+    assert.equal(body.clip.status, "scheduled");
+    assert.equal(body.scheduledCount, 1);
+
+    const clip = await prisma.clip.findUniqueOrThrow({
+      where: {
+        id: fixture.clipId,
+      },
+      select: {
+        status: true,
+        scheduledFor: true,
+      },
+    });
+    assert.equal(clip.status, "scheduled");
+    assert.ok(clip.scheduledFor);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
 test("reject transitions candidate to rejected and does not render", async () => {
   const fixture = await createFixture();
   let renderCalls = 0;
@@ -213,6 +263,13 @@ async function createFixture(): Promise<ReviewFixture> {
 }
 
 async function cleanupFixture(fixture: ReviewFixture): Promise<void> {
+  await prisma.schedule.deleteMany({
+    where: {
+      creatorId: {
+        in: [fixture.creatorAId, fixture.creatorBId],
+      },
+    },
+  });
   await prisma.learningEvent.deleteMany({
     where: {
       creatorId: {

@@ -1,4 +1,6 @@
-export const RUNWAY_WARNING_THRESHOLD_DAYS = 2;
+import { DEFAULT_RUNWAY_THRESHOLD_DAYS } from "./schedule-settings";
+
+export const RUNWAY_WARNING_THRESHOLD_DAYS = DEFAULT_RUNWAY_THRESHOLD_DAYS;
 
 export type RunwayTone = "calm" | "amber" | "red";
 
@@ -47,7 +49,10 @@ export type HomeNudgeInput = {
       }
     | null
     | undefined;
+  reviewReminders?: boolean;
+  runwayWarnings?: boolean;
   runwayWarningThresholdDays?: number;
+  postTimeNudges?: boolean;
 };
 
 export function computeRunway(
@@ -97,7 +102,7 @@ export function selectHomeNudges(input: HomeNudgeInput): HomeNudge[] {
     input.runwayWarningThresholdDays ?? RUNWAY_WARNING_THRESHOLD_DAYS;
   const nudges: HomeNudge[] = [];
 
-  if (input.reviewCount > 0) {
+  if (input.reviewReminders !== false && input.reviewCount > 0) {
     nudges.push({
       id: `review:${input.reviewCount}`,
       kind: "review",
@@ -106,7 +111,11 @@ export function selectHomeNudges(input: HomeNudgeInput): HomeNudge[] {
     });
   }
 
-  if (input.runway.kind === "ready" && input.runway.days < threshold) {
+  if (
+    input.runwayWarnings !== false &&
+    input.runway.kind === "ready" &&
+    input.runway.days < threshold
+  ) {
     nudges.push({
       id: `runway:${Math.round(input.runway.days * 10)}:${threshold}`,
       kind: "runway",
@@ -115,7 +124,7 @@ export function selectHomeNudges(input: HomeNudgeInput): HomeNudge[] {
     });
   }
 
-  if (input.dueClip?.isDue) {
+  if (input.postTimeNudges !== false && input.dueClip?.isDue) {
     nudges.push({
       id: `post:${input.dueClip.clipId}`,
       kind: "post",

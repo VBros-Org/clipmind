@@ -7,7 +7,7 @@ import {
   type HomeNudge,
   type RunwayState,
 } from "./home-rules";
-import { SCHEDULE_ANCHOR_HOUR_UTC } from "./scheduling";
+import { scheduleSettingsFromRow, type ScheduleSettings } from "./schedule-settings";
 import { formatVideoLabel } from "./video-label";
 
 export type { HomeNudge, RunwayState } from "./home-rules";
@@ -47,12 +47,7 @@ export type RecentUpload = {
 };
 
 export type RhythmOverview = {
-  schedule:
-    | {
-        slotsPerDay: number;
-        firstHourUtc: number;
-      }
-    | null;
+  schedule: ScheduleSettings | null;
   creator: {
     channelUrl: string | null;
     captionPreset: string;
@@ -103,6 +98,11 @@ export async function loadHomeOverview(
       },
       select: {
         slotsPerDay: true,
+        anchorHour: true,
+        reviewReminders: true,
+        runwayWarnings: true,
+        runwayThresholdDays: true,
+        postTimeNudges: true,
       },
     }),
     db.clip.count({
@@ -164,6 +164,7 @@ export async function loadHomeOverview(
   ]);
 
   const runway = computeRunway(queuedClipCount, schedule);
+  const scheduleSettings = scheduleSettingsFromRow(schedule);
   const nextUp = nextScheduledClip?.scheduledFor
     ? toNextScheduledClip(nextScheduledClip)
     : null;
@@ -178,6 +179,10 @@ export async function loadHomeOverview(
             isDue: true,
           }
         : null,
+    reviewReminders: scheduleSettings?.reviewReminders,
+    runwayWarnings: scheduleSettings?.runwayWarnings,
+    runwayWarningThresholdDays: scheduleSettings?.runwayThresholdDays,
+    postTimeNudges: scheduleSettings?.postTimeNudges,
   });
 
   return {
@@ -250,19 +255,18 @@ export async function loadRhythmOverview(
       schedule: {
         select: {
           slotsPerDay: true,
-          slots: true,
+          anchorHour: true,
+          reviewReminders: true,
+          runwayWarnings: true,
+          runwayThresholdDays: true,
+          postTimeNudges: true,
         },
       },
     },
   });
 
   return {
-    schedule: creator.schedule
-      ? {
-          slotsPerDay: creator.schedule.slotsPerDay,
-          firstHourUtc: firstHourFromSlots(creator.schedule.slots),
-        }
-      : null,
+    schedule: scheduleSettingsFromRow(creator.schedule),
     creator: {
       channelUrl: creator.channelUrl,
       captionPreset: captionPresetFromStyle(creator.captionStyle),
@@ -302,38 +306,12 @@ function hasPostCopyVariants(value: Prisma.JsonValue): boolean {
   );
 }
 
-function firstHourFromSlots(value: Prisma.JsonValue): number {
-  if (Array.isArray(value)) {
-    const first = value[0];
-    if (typeof first === "string") {
-      const hourMatch = /^(\d{1,2}):/.exec(first);
-      if (hourMatch) {
-        return clampHour(Number(hourMatch[1]));
-      }
-    }
-
-    if (isRecord(first) && typeof first.hour === "number") {
-      return clampHour(first.hour);
-    }
-  }
-
-  return SCHEDULE_ANCHOR_HOUR_UTC;
-}
-
 function captionPresetFromStyle(value: Prisma.JsonValue): string {
   if (!isRecord(value) || typeof value.preset !== "string") {
     return "clean-bold";
   }
 
   return value.preset;
-}
-
-function clampHour(hour: number): number {
-  if (!Number.isFinite(hour)) {
-    return SCHEDULE_ANCHOR_HOUR_UTC;
-  }
-
-  return Math.min(23, Math.max(0, Math.trunc(hour)));
 }
 
 function formatHourMinute(date: Date): string {
