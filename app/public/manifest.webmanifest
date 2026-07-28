@@ -2,7 +2,7 @@
   "name": "ClipMind",
   "short_name": "ClipMind",
   "description": "Upload a long video. ClipMind ranks the clips, writes captions in your voice, and you tap post.",
-  "start_url": "/review",
+  "start_url": "/home",
   "scope": "/",
   "display": "standalone",
   "background_color": "#0d1117",

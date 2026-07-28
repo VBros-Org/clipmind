@@ -1,98 +1,70 @@
-import Link from "next/link";
-import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
+import { loadAppFrameData } from "../../../lib/app-overview";
+import { loadReviewGroups, type ReviewVideoGroup } from "../../../lib/review";
+import { formatVideoLabel } from "../../../lib/video-label";
+import { AppShell } from "../AppShell";
+import { requireCreatorSession } from "../app-session";
 
 import {
-  CREATOR_ACCESS_COOKIE,
-  loadCreatorSessionForAccessCode,
-} from "../../../lib/review-auth";
-import { loadReviewVideos } from "../../../lib/review";
-import { InstallPrompt } from "../../components/InstallPrompt";
-
+  ReviewBoard,
+  type ReviewClipView,
+  type ReviewVideoGroupView,
+} from "./ReviewBoard";
 import styles from "./review.module.css";
 
-const STATUS_LABELS = [
-  "candidate",
-  "accepted",
-  "rejected",
-  "scheduled",
-  "posted",
-] as const;
+type ReviewPageProps = {
+  searchParams?: Promise<{
+    clip?: string;
+  }>;
+};
 
-export default async function ReviewPage() {
+export default async function ReviewPage({ searchParams }: ReviewPageProps) {
   const session = await requireCreatorSession();
-  const videos = await loadReviewVideos(session.creatorId);
+  const params = (await searchParams) ?? {};
+  const [frame, groups] = await Promise.all([
+    loadAppFrameData(session.creatorId),
+    loadReviewGroups(session.creatorId),
+  ]);
 
   return (
-    <main className={styles.screen}>
-      <div className={styles.shell}>
+    <AppShell activeTab="review" reviewCount={frame.reviewCount}>
+      <section className={styles.pageStack}>
         <header className={styles.header}>
           <p className={styles.eyebrow}>Review</p>
-          <h1 className={styles.title}>Your videos</h1>
-          <p className={styles.muted}>Newest videos are first.</p>
-          <InstallPrompt placement="banner" />
+          <h1 className={styles.title}>Judge clips</h1>
+          <p className={styles.subhead}>Clips are ordered by Mind rank.</p>
         </header>
-
-        <section className={styles.list}>
-          {videos.length === 0 ? (
-            <p className={styles.muted}>No videos yet.</p>
-          ) : (
-            videos.map((video) => (
-              <Link
-                className={styles.videoCard}
-                href={`/review/${video.id}`}
-                key={video.id}
-              >
-                <div className={styles.videoTop}>
-                  <div>
-                    <h2 className={styles.videoTitle}>
-                      {video.sourceUrl ?? video.sourceKey ?? video.id}
-                    </h2>
-                    <p className={styles.muted}>Status: {video.status}</p>
-                  </div>
-                  <time className={styles.date}>
-                    {formatDate(video.createdAt)}
-                  </time>
-                </div>
-
-                <div className={styles.counts}>
-                  {STATUS_LABELS.map((status) => (
-                    <span className={styles.count} key={status}>
-                      <span className={styles.countNumber}>
-                        {video.counts[status]}
-                      </span>
-                      <span className={styles.countLabel}>{status}</span>
-                    </span>
-                  ))}
-                </div>
-
-                <span className={styles.open}>Open review</span>
-              </Link>
-            ))
-          )}
-        </section>
-      </div>
-    </main>
+        <ReviewBoard
+          groups={groups.map(serializeGroup)}
+          initialClipId={params.clip ?? null}
+        />
+      </section>
+    </AppShell>
   );
 }
 
-async function requireCreatorSession() {
-  const cookieStore = await cookies();
-  const session = await loadCreatorSessionForAccessCode(
-    cookieStore.get(CREATOR_ACCESS_COOKIE)?.value,
-  );
-  if (!session) {
-    redirect("/login");
-  }
-
-  return session;
+function serializeGroup(group: ReviewVideoGroup): ReviewVideoGroupView {
+  return {
+    id: group.id,
+    title: formatVideoLabel(group.createdAt),
+    status: group.status,
+    createdAt: group.createdAt.toISOString(),
+    totalClips: group.totalClips,
+    clips: group.clips.map(serializeClip),
+  };
 }
 
-function formatDate(date: Date): string {
-  return new Intl.DateTimeFormat("en", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
+function serializeClip(clip: ReviewVideoGroup["clips"][number]): ReviewClipView {
+  return {
+    id: clip.id,
+    videoId: clip.videoId,
+    status: clip.status,
+    startMs: clip.startMs,
+    endMs: clip.endMs,
+    renderedUrl: clip.renderedUrl,
+    postCopyVariants: clip.postCopyVariants,
+    transcript: clip.transcript,
+    mindRank: clip.mindRank,
+    mindRankReason: clip.mindRankReason,
+    createdAt: clip.createdAt.toISOString(),
+  };
 }

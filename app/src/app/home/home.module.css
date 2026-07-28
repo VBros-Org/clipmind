@@ -1,0 +1,183 @@
+.stack {
+  display: grid;
+  gap: var(--cm-stack-gap);
+}
+
+.runwayHero {
+  display: grid;
+  min-height: calc(var(--cm-space-6) * 6);
+  align-content: center;
+  justify-items: center;
+  border: var(--cm-border-width) solid var(--cm-border);
+  border-radius: var(--cm-radius-card);
+  background: var(--cm-surface);
+  padding: var(--cm-card-padding);
+  text-align: center;
+}
+
+.calm {
+  color: var(--cm-accent);
+}
+
+.amber {
+  color: var(--cm-amber);
+}
+
+.red {
+  color: var(--cm-red);
+}
+
+.runwayNumber {
+  margin: 0;
+  color: currentColor;
+  font-size: var(--cm-font-runway);
+  font-weight: 900;
+  line-height: var(--cm-line-numeral);
+}
+
+.runwayLabel {
+  margin: 0;
+  color: var(--cm-text-soft);
+  font-size: var(--cm-font-body);
+  font-weight: 800;
+}
+
+.runwayLink {
+  min-height: var(--cm-touch-target);
+  color: var(--cm-accent-strong);
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--cm-font-secondary);
+  font-weight: 800;
+}
+
+.nextUp {
+  display: grid;
+  grid-template-columns: var(--cm-thumb-hero-width) minmax(0, 1fr);
+  gap: var(--cm-space-4);
+  align-items: stretch;
+  border: var(--cm-border-width) solid var(--cm-border);
+  border-radius: var(--cm-radius-card);
+  background: var(--cm-surface-raised);
+  padding: var(--cm-card-padding);
+}
+
+.nextThumb {
+  width: var(--cm-thumb-hero-width);
+  height: var(--cm-thumb-hero-height);
+  overflow: hidden;
+  border-radius: var(--cm-radius-action);
+  background: var(--cm-bg-deep);
+}
+
+.nextVideo {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: var(--cm-bg-deep);
+}
+
+.poster {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  color: var(--cm-text-muted);
+  font-size: var(--cm-font-secondary);
+  font-weight: 800;
+  text-align: center;
+}
+
+.nextCopy {
+  display: grid;
+  min-width: 0;
+  align-content: center;
+  gap: var(--cm-space-2);
+}
+
+.sectionLabel {
+  margin: 0;
+  color: var(--cm-accent-strong);
+  font-size: var(--cm-font-label);
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.nextTitle {
+  margin: 0;
+  color: var(--cm-text);
+  font-size: var(--cm-font-section);
+  line-height: var(--cm-line-numeral);
+  overflow-wrap: anywhere;
+}
+
+.nextTime,
+.captionState {
+  margin: 0;
+  color: var(--cm-text-muted);
+  font-size: var(--cm-font-secondary);
+}
+
+.openClip {
+  display: inline-flex;
+  min-height: var(--cm-touch-target);
+  align-items: center;
+  color: var(--cm-accent);
+  font-size: var(--cm-font-secondary);
+  font-weight: 900;
+}
+
+.nudges {
+  display: grid;
+  gap: var(--cm-stack-gap);
+}
+
+.nudgeCard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--cm-space-3);
+  align-items: center;
+  border: var(--cm-border-width) solid var(--cm-border);
+  border-radius: var(--cm-radius-card);
+  background: var(--cm-surface-raised);
+  padding: var(--cm-card-padding);
+}
+
+.nudgeLink {
+  min-width: 0;
+  color: var(--cm-text);
+  font-weight: 850;
+  line-height: var(--cm-line-body);
+}
+
+.dismiss {
+  min-height: var(--cm-touch-target);
+  border: 0;
+  background: transparent;
+  color: var(--cm-text-muted);
+  cursor: pointer;
+  font-size: var(--cm-font-secondary);
+  font-weight: 800;
+}
+
+.stats {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--cm-space-3);
+  color: var(--cm-text-faint);
+  font-size: var(--cm-font-secondary);
+  padding: var(--cm-space-3) var(--cm-space-1) 0;
+}
+
+@media (max-width: 27rem) {
+  .nextUp {
+    grid-template-columns: var(--cm-thumb-strip-width) minmax(0, 1fr);
+  }
+
+  .nextThumb {
+    width: var(--cm-thumb-strip-width);
+    height: var(--cm-thumb-strip-height);
+  }
+}

@@ -2,22 +2,90 @@
   box-sizing: border-box;
 }
 
+:root {
+  --cm-font-label: 12px;
+  --cm-font-secondary: 14px;
+  --cm-font-body: 17px;
+  --cm-font-section: 22px;
+  --cm-font-page: 28px;
+  --cm-font-runway: 72px;
+  --cm-line-body: 1.4;
+  --cm-line-numeral: 1.1;
+
+  --cm-space-1: 4px;
+  --cm-space-2: 8px;
+  --cm-space-3: 12px;
+  --cm-space-4: 16px;
+  --cm-space-5: 24px;
+  --cm-space-6: 32px;
+
+  --cm-page-gutter: var(--cm-space-4);
+  --cm-card-padding: var(--cm-space-4);
+  --cm-stack-gap: var(--cm-space-3);
+  --cm-touch-target: 48px;
+  --cm-action-height: 56px;
+  --cm-tab-height: 56px;
+  --cm-bottom-nav-height: calc(var(--cm-tab-height) + env(safe-area-inset-bottom));
+  --cm-safe-top: calc(var(--cm-space-3) + env(safe-area-inset-top));
+
+  --cm-radius-card: 16px;
+  --cm-radius-action: 12px;
+  --cm-radius-small: 8px;
+  --cm-border-width: 1px;
+
+  --cm-thumb-strip-width: 104px;
+  --cm-thumb-strip-height: 184px;
+  --cm-thumb-hero-width: 148px;
+  --cm-thumb-hero-height: 260px;
+
+  --cm-content-max: 45rem;
+  --cm-content-wide: 64rem;
+  --cm-landing-panel: 38.75rem;
+  --cm-login-panel: 26.25rem;
+  --cm-icon-landing: 112px;
+  --cm-modal-width: 26.25rem;
+
+  --cm-bg: #0d1117;
+  --cm-bg-deep: #070a0f;
+  --cm-surface: #10161f;
+  --cm-surface-raised: #121923;
+  --cm-surface-soft: rgba(255, 255, 255, 0.06);
+  --cm-surface-softer: rgba(255, 255, 255, 0.04);
+  --cm-text: #f7f2e8;
+  --cm-text-soft: #d5e1e8;
+  --cm-text-muted: #a9b9c5;
+  --cm-text-faint: #6f7d89;
+  --cm-accent: #5fb3b3;
+  --cm-accent-strong: #7fd1c7;
+  --cm-amber: #f0c36a;
+  --cm-red: #ff7a66;
+  --cm-red-soft: #ffb4a7;
+  --cm-ink: #071012;
+  --cm-border: rgba(247, 242, 232, 0.12);
+  --cm-border-strong: rgba(247, 242, 232, 0.22);
+  --cm-focus: rgba(95, 179, 179, 0.16);
+  --cm-overlay: rgba(0, 0, 0, 0.68);
+  --cm-shadow-soft: 0 24px 80px rgba(0, 0, 0, 0.3);
+  --cm-shadow-icon: 0 20px 60px rgba(0, 0, 0, 0.36);
+}
+
 html {
   min-height: 100%;
-  background: #0d1117;
-  color: #f7f2e8;
+  background: var(--cm-bg);
+  color: var(--cm-text);
+  font-size: var(--cm-font-body);
 }
 
 body {
   min-height: 100%;
   margin: 0;
-  background:
-    radial-gradient(circle at top left, rgba(69, 123, 157, 0.24), transparent 30rem),
-    linear-gradient(180deg, #10161f 0%, #0d1117 48%, #070a0f 100%);
-  color: #f7f2e8;
+  background: var(--cm-bg);
+  color: var(--cm-text);
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
+  font-size: var(--cm-font-body);
+  line-height: var(--cm-line-body);
 }
 
 a {
@@ -28,4 +96,8 @@ a {
 button,
 input {
   font: inherit;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
 }

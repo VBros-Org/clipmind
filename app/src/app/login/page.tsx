@@ -23,7 +23,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
     <main className={styles.screen}>
       <section className={styles.panel}>
         <h1 className={styles.title}>ClipMind</h1>
-        <p className={styles.copy}>Enter your creator code to review clips.</p>
+        <p className={styles.copy}>Enter your creator code to open ClipMind.</p>
         <form action={loginCreator} className={styles.form}>
           <label className={styles.label}>
             Creator code
@@ -67,5 +67,5 @@ async function loginCreator(formData: FormData) {
     maxAge: CREATOR_ACCESS_COOKIE_MAX_AGE_SECONDS,
   });
 
-  redirect("/review");
+  redirect("/home");
 }

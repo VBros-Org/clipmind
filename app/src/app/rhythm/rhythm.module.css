@@ -1,0 +1,191 @@
+.stack {
+  display: grid;
+  gap: var(--cm-space-5);
+}
+
+.header {
+  display: grid;
+  gap: var(--cm-space-2);
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--cm-accent-strong);
+  font-size: var(--cm-font-label);
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--cm-font-page);
+  line-height: var(--cm-line-numeral);
+}
+
+.card,
+.accountCard {
+  display: grid;
+  gap: var(--cm-stack-gap);
+  border: var(--cm-border-width) solid var(--cm-border);
+  border-radius: var(--cm-radius-card);
+  background: var(--cm-surface);
+  padding: var(--cm-card-padding);
+}
+
+.accountCard {
+  background: var(--cm-surface-raised);
+}
+
+.cardHeader {
+  display: flex;
+  gap: var(--cm-space-3);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sectionTitle {
+  margin: 0;
+  font-size: var(--cm-font-section);
+  line-height: var(--cm-line-numeral);
+}
+
+.note {
+  color: var(--cm-text-muted);
+  font-size: var(--cm-font-label);
+  font-weight: 800;
+}
+
+.preview {
+  margin: 0;
+  color: var(--cm-text);
+  font-size: var(--cm-font-section);
+  font-weight: 900;
+  line-height: var(--cm-line-body);
+}
+
+.controlRow,
+.selectRow,
+.toggleRow,
+.channelRow {
+  display: flex;
+  min-height: var(--cm-touch-target);
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--cm-space-3);
+  border-radius: var(--cm-radius-action);
+  background: var(--cm-surface-soft);
+  color: var(--cm-text-soft);
+  font-size: var(--cm-font-secondary);
+  font-weight: 800;
+  padding-inline: var(--cm-space-3);
+}
+
+.selectRow select {
+  min-height: var(--cm-touch-target);
+  border: 0;
+  background: transparent;
+  color: var(--cm-text);
+  font-weight: 900;
+}
+
+.stepper {
+  display: inline-grid;
+  grid-template-columns: var(--cm-touch-target) auto var(--cm-touch-target);
+  align-items: center;
+  overflow: hidden;
+  border: var(--cm-border-width) solid var(--cm-border);
+  border-radius: var(--cm-radius-action);
+}
+
+.stepper button,
+.stepper span {
+  display: inline-flex;
+  min-height: var(--cm-touch-target);
+  align-items: center;
+  justify-content: center;
+  color: var(--cm-text);
+  font-weight: 900;
+  padding-inline: var(--cm-space-3);
+}
+
+.stepper button {
+  border: 0;
+  background: transparent;
+}
+
+.toggleRow input {
+  width: var(--cm-space-5);
+  height: var(--cm-space-5);
+  accent-color: var(--cm-accent);
+}
+
+.presetList {
+  display: grid;
+  gap: var(--cm-space-2);
+}
+
+.presetOption {
+  display: grid;
+  grid-template-columns: var(--cm-touch-target) minmax(0, 1fr) auto;
+  gap: var(--cm-space-3);
+  align-items: center;
+  border: var(--cm-border-width) solid var(--cm-border);
+  border-radius: var(--cm-radius-action);
+  background: var(--cm-surface-soft);
+  color: var(--cm-text-soft);
+  font-size: var(--cm-font-secondary);
+  font-weight: 800;
+  padding: var(--cm-space-2) var(--cm-space-3);
+}
+
+.presetOption input {
+  width: var(--cm-space-5);
+  height: var(--cm-space-5);
+  accent-color: var(--cm-accent);
+}
+
+.activePreset {
+  border-color: var(--cm-accent);
+  color: var(--cm-text);
+}
+
+.previewStrip {
+  position: relative;
+  overflow: hidden;
+  height: var(--cm-space-5);
+  border-radius: var(--cm-space-5);
+  background: var(--cm-text);
+}
+
+.previewStrip::after {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0;
+  width: 54%;
+  background: var(--cm-accent);
+  content: "";
+}
+
+.channelRow {
+  align-items: flex-start;
+  padding-block: var(--cm-space-3);
+}
+
+.channelRow span:last-child {
+  min-width: 0;
+  color: var(--cm-text-muted);
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.logoutButton {
+  width: 100%;
+  min-height: var(--cm-action-height);
+  border: var(--cm-border-width) solid var(--cm-border-strong);
+  border-radius: var(--cm-radius-action);
+  background: transparent;
+  color: var(--cm-text);
+  cursor: pointer;
+  font-weight: 900;
+}
