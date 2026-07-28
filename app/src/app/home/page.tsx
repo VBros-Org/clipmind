@@ -75,7 +75,9 @@ function RunwayHero({
       <p className={styles.runwayNumber} id="runway-title">
         {formatRunwayDays(runway.days)}
       </p>
-      <p className={styles.runwayLabel}>days of posts left</p>
+      <p className={styles.runwayLabel}>
+        {formatRunwayDays(runway.days) === "1" ? "day of posts left" : "days of posts left"}
+      </p>
     </section>
   );
 }
