@@ -13,14 +13,28 @@ datasource db {
 model Creator {
   id            String    @id @default(cuid())
   accessCode    String?   @unique
+  displayName   String?
   channelUrl    String?
   mindId        String? // the creator's Minds agent (voice + clip-taste Tenets)
+  mindStage     String? // pending | learning_voice | waking_mind | teaching_taste | ready | failed
+  mindError     String? // Short named-step Mind onboarding failure message. Never stores stack traces.
   initialTenets Json? // distilled creator voice + clip-taste Tenets from onboarding
   captionStyle  Json? // burned-in subtitle preset: font, size, position, colour, highlight
   createdAt     DateTime  @default(now())
+  inviteCode    InviteCode?
   videos        Video[]
   clips         Clip[]
   schedule      Schedule?
+}
+
+model InviteCode {
+  id              String   @id @default(cuid())
+  code            String   @unique
+  note            String?
+  usedByCreatorId String?  @unique
+  usedByCreator   Creator? @relation(fields: [usedByCreatorId], references: [id])
+  usedAt          DateTime?
+  createdAt       DateTime @default(now())
 }
 
 model Video {

@@ -171,6 +171,7 @@ function recordingRepository(creatorId: string): OnboardingRepository {
     async ensureCreator() {
       return { id: creatorId };
     },
+    async saveMindId() {},
     async saveInitialTenets() {},
     async saveMindIdAndInitialTenets() {},
   };

@@ -39,6 +39,10 @@ export default async function RhythmPage() {
           <h2 className={styles.sectionTitle} id="account-title">
             Account
           </h2>
+          <div className={styles.channelRow}>
+            <span>Display name</span>
+            <span>{overview.creator.displayName ?? "No name saved."}</span>
+          </div>
           <div className={styles.presetList}>
             {CAPTION_PRESETS.map((preset) => (
               <label

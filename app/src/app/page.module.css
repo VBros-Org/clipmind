@@ -48,16 +48,27 @@
   justify-content: center;
 }
 
-.loginLink {
+.loginLink,
+.signupLink {
   display: inline-flex;
   min-height: var(--cm-touch-target);
-  min-width: var(--cm-icon-landing);
   align-items: center;
   justify-content: center;
-  border: var(--cm-border-width) solid var(--cm-border-strong);
   border-radius: var(--cm-radius-small);
-  color: var(--cm-text);
   font-weight: 800;
+}
+
+.signupLink {
+  min-width: calc(var(--cm-icon-landing) * 2);
+  background: var(--cm-accent);
+  color: var(--cm-ink);
+  padding-inline: var(--cm-space-4);
+}
+
+.loginLink {
+  min-width: var(--cm-icon-landing);
+  border: var(--cm-border-width) solid var(--cm-border-strong);
+  color: var(--cm-text);
 }
 
 @media (max-width: 23.75rem) {

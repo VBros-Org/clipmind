@@ -22,6 +22,7 @@ export interface OnboardingRepository {
     creatorId?: string;
     channelUrl?: string;
   }): Promise<CreatorRef>;
+  saveMindId(creatorId: string, mindId: string): Promise<void>;
   saveInitialTenets(creatorId: string, tenets: InitialTenets): Promise<void>;
   saveMindIdAndInitialTenets(
     creatorId: string,
@@ -64,17 +65,11 @@ export async function onboardCreator(
     channelUrl: options.channelUrl,
   });
 
-  const transcripts: WeightedTranscript[] = [];
-  for (const item of options.corpusItems) {
-    transcripts.push({
-      source: item.source,
-      sourceType: item.sourceType,
-      weight: item.weight,
-      transcript: await options.transcribeItem(item),
-    });
-  }
-
-  const tenets = await options.distillTenets(transcripts);
+  const transcripts = await transcribeCorpusItems(
+    options.corpusItems,
+    options.transcribeItem,
+  );
+  const tenets = await distillCorpusTenets(transcripts, options.distillTenets);
 
   if (!options.mindsClient) {
     await options.repository.saveInitialTenets(creator.id, tenets);
@@ -92,17 +87,22 @@ export async function onboardCreator(
 
   const stewardEmail =
     options.stewardEmail?.trim() || DEFAULT_CREATOR_STEWARD_EMAIL;
-  const mind = await options.mindsClient.createMind(
-    buildMindName(creator.id),
+  const mind = await createCreatorMind({
+    creatorId: creator.id,
     stewardEmail,
-  );
-  await options.mindsClient.addTenets(mind.mindId, tenets);
+    mindsClient: options.mindsClient,
+  });
+  await options.repository.saveMindId(creator.id, mind.mindId);
+  await seedCreatorTenets(options.mindsClient, mind.mindId, tenets);
   await options.repository.saveMindIdAndInitialTenets(
     creator.id,
     mind.mindId,
     tenets,
   );
-  const verifyTenetsReply = await options.mindsClient.verifyTenets(mind.mindId);
+  const verifyTenetsReply = await verifyCreatorTenets(
+    options.mindsClient,
+    mind.mindId,
+  );
 
   return {
     status: "PASSED",
@@ -114,6 +114,59 @@ export async function onboardCreator(
     transcriptCount: transcripts.length,
     message: `Mind created for Creator ${creator.id}`,
   };
+}
+
+export async function transcribeCorpusItems(
+  corpusItems: CorpusItem[],
+  transcribeItem: (item: CorpusItem) => Promise<Transcript>,
+): Promise<WeightedTranscript[]> {
+  const transcripts: WeightedTranscript[] = [];
+  for (const item of corpusItems) {
+    transcripts.push({
+      source: item.source,
+      sourceType: item.sourceType,
+      weight: item.weight,
+      transcript: await transcribeItem(item),
+    });
+  }
+
+  return transcripts;
+}
+
+export function distillCorpusTenets(
+  transcripts: WeightedTranscript[],
+  distillTenets: (transcripts: WeightedTranscript[]) => Promise<InitialTenets>,
+): Promise<InitialTenets> {
+  return distillTenets(transcripts);
+}
+
+export function createCreatorMind(args: {
+  creatorId: string;
+  stewardEmail?: string;
+  mindsClient: MindsClient;
+}): Promise<{
+  mindId: string;
+  mindEmail: string;
+}> {
+  return args.mindsClient.createMind(
+    buildMindName(args.creatorId),
+    args.stewardEmail?.trim() || DEFAULT_CREATOR_STEWARD_EMAIL,
+  );
+}
+
+export function seedCreatorTenets(
+  mindsClient: MindsClient,
+  mindId: string,
+  tenets: InitialTenets,
+): Promise<void> {
+  return mindsClient.addTenets(mindId, tenets);
+}
+
+export function verifyCreatorTenets(
+  mindsClient: MindsClient,
+  mindId: string,
+): Promise<string> {
+  return mindsClient.verifyTenets(mindId);
 }
 
 export function buildMindName(creatorId: string): string {

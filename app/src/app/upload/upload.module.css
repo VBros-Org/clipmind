@@ -33,6 +33,21 @@
   padding: var(--cm-card-padding);
 }
 
+.mindPrompt {
+  display: grid;
+  gap: var(--cm-space-2);
+  border: var(--cm-border-width) solid color-mix(in srgb, var(--cm-accent) 45%, var(--cm-border));
+  border-radius: var(--cm-radius-card);
+  background: var(--cm-surface-raised);
+  padding: var(--cm-card-padding);
+}
+
+.mindPrompt p {
+  margin: 0;
+  color: var(--cm-text-soft);
+  font-size: var(--cm-font-secondary);
+}
+
 .dropZone {
   display: grid;
   min-height: calc(var(--cm-action-height) * 3);

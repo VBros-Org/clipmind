@@ -1,0 +1,251 @@
+.screen {
+  min-height: 100dvh;
+  background: var(--cm-bg);
+  color: var(--cm-text);
+  padding: var(--cm-safe-top) var(--cm-page-gutter) var(--cm-space-6);
+}
+
+.panel {
+  display: grid;
+  width: min(100%, var(--cm-content-max));
+  margin: 0 auto;
+  gap: var(--cm-space-5);
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--cm-accent-strong);
+  font-size: var(--cm-font-label);
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--cm-font-page);
+  line-height: var(--cm-line-numeral);
+}
+
+.steps {
+  display: grid;
+  grid-template-columns: repeat(4, var(--cm-touch-target));
+  gap: var(--cm-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.steps li {
+  display: grid;
+  width: var(--cm-touch-target);
+  height: var(--cm-touch-target);
+  place-items: center;
+  border: var(--cm-border-width) solid var(--cm-border);
+  border-radius: var(--cm-radius-action);
+  color: var(--cm-text-muted);
+  font-size: var(--cm-font-secondary);
+  font-weight: 900;
+}
+
+.stepActive {
+  border-color: var(--cm-accent) !important;
+  background: var(--cm-accent);
+  color: var(--cm-ink) !important;
+}
+
+.form,
+.accessStep,
+.corpusStep {
+  display: grid;
+  gap: var(--cm-space-4);
+  border: var(--cm-border-width) solid var(--cm-border);
+  border-radius: var(--cm-radius-card);
+  background: var(--cm-surface);
+  padding: var(--cm-card-padding);
+}
+
+.label {
+  display: grid;
+  gap: var(--cm-space-2);
+  color: var(--cm-text-soft);
+  font-size: var(--cm-font-secondary);
+  font-weight: 800;
+}
+
+.input {
+  width: 100%;
+  min-height: var(--cm-touch-target);
+  border: var(--cm-border-width) solid var(--cm-border-strong);
+  border-radius: var(--cm-radius-small);
+  background: var(--cm-bg-deep);
+  color: var(--cm-text);
+  padding: var(--cm-space-3) var(--cm-space-4);
+  outline: none;
+}
+
+.input:focus {
+  border-color: var(--cm-accent);
+  box-shadow: 0 0 0 var(--cm-space-1) var(--cm-focus);
+}
+
+.presetField {
+  display: grid;
+  gap: var(--cm-space-2);
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.presetField legend {
+  margin-block-end: var(--cm-space-2);
+  color: var(--cm-text-soft);
+  font-size: var(--cm-font-secondary);
+  font-weight: 800;
+}
+
+.presetOption {
+  display: grid;
+  grid-template-columns: var(--cm-touch-target) minmax(3.5rem, 5rem) minmax(0, 1fr);
+  gap: var(--cm-space-3);
+  align-items: center;
+  border: var(--cm-border-width) solid var(--cm-border);
+  border-radius: var(--cm-radius-action);
+  background: var(--cm-surface-soft);
+  padding: var(--cm-space-2) var(--cm-space-3);
+}
+
+.presetOption input {
+  width: var(--cm-space-5);
+  height: var(--cm-space-5);
+  accent-color: var(--cm-accent);
+}
+
+.presetOption strong,
+.presetOption small {
+  display: block;
+}
+
+.presetOption strong {
+  color: var(--cm-text);
+  font-size: var(--cm-font-body);
+}
+
+.presetOption small {
+  color: var(--cm-text-muted);
+  font-size: var(--cm-font-label);
+}
+
+.presetActive {
+  border-color: var(--cm-accent);
+}
+
+.previewStrip {
+  position: relative;
+  height: var(--cm-space-5);
+  overflow: hidden;
+  border-radius: var(--cm-space-5);
+  background: var(--cm-text);
+}
+
+.previewStrip::after {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0;
+  width: 54%;
+  background: var(--cm-accent);
+  content: "";
+}
+
+.button,
+.secondaryButton {
+  min-height: var(--cm-action-height);
+  border-radius: var(--cm-radius-action);
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.button {
+  border: 0;
+  background: var(--cm-accent);
+  color: var(--cm-ink);
+}
+
+.button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.secondaryButton {
+  border: var(--cm-border-width) solid var(--cm-border-strong);
+  background: transparent;
+  color: var(--cm-text);
+}
+
+.copy {
+  margin: 0;
+  color: var(--cm-text-soft);
+  font-size: var(--cm-font-body);
+}
+
+.accessCode {
+  overflow-wrap: anywhere;
+  border: var(--cm-border-width) solid var(--cm-accent);
+  border-radius: var(--cm-radius-card);
+  background: var(--cm-bg-deep);
+  color: var(--cm-text);
+  font-size: var(--cm-font-page);
+  font-weight: 900;
+  line-height: var(--cm-line-numeral);
+  padding: var(--cm-space-4);
+  text-align: center;
+}
+
+.corpusHeader {
+  display: flex;
+  gap: var(--cm-space-3);
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.corpusHeader h2 {
+  margin: 0;
+  font-size: var(--cm-font-section);
+  line-height: var(--cm-line-body);
+}
+
+.corpusHeader a {
+  flex: 0 0 auto;
+  color: var(--cm-accent-strong);
+  font-size: var(--cm-font-secondary);
+  font-weight: 900;
+}
+
+.error {
+  margin: 0;
+  border: var(--cm-border-width) solid var(--cm-red);
+  border-radius: var(--cm-radius-action);
+  background: color-mix(in srgb, var(--cm-red) 16%, var(--cm-surface));
+  color: var(--cm-red-soft);
+  font-size: var(--cm-font-secondary);
+  font-weight: 800;
+  padding: var(--cm-space-3);
+}
+
+@media (max-width: 24rem) {
+  .steps {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .steps li {
+    width: 100%;
+  }
+
+  .presetOption {
+    grid-template-columns: var(--cm-touch-target) minmax(0, 1fr);
+  }
+
+  .previewStrip {
+    grid-column: 2;
+  }
+}

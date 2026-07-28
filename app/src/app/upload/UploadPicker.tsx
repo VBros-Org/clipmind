@@ -7,6 +7,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import styles from "./upload.module.css";
 
 type PipelineStage =
+  | "learning_voice"
+  | "waking_mind"
+  | "teaching_taste"
   | "uploaded"
   | "transcribing"
   | "candidates"
@@ -54,6 +57,21 @@ const STEPS: {
   line: string;
 }[] = [
   {
+    id: "learning_voice",
+    label: "Learning your voice",
+    line: "Your corpus is being distilled into a voice profile.",
+  },
+  {
+    id: "waking_mind",
+    label: "Waking your Mind",
+    line: "A dedicated Mind is being created for this creator.",
+  },
+  {
+    id: "teaching_taste",
+    label: "Teaching it your taste",
+    line: "Your voice and clip taste are being seeded as Tenets.",
+  },
+  {
     id: "uploaded",
     label: "Uploaded",
     line: "Source video is saved.",
@@ -85,7 +103,24 @@ const STEPS: {
   },
 ];
 
-export function UploadPicker({ initialUploads }: { initialUploads: UploadView[] }) {
+const NORMAL_STEP_IDS = new Set<string>([
+  "uploaded",
+  "transcribing",
+  "candidates",
+  "ranking",
+  "captions",
+  "done",
+]);
+
+export function UploadPicker({
+  initialUploads,
+  includeMindSteps = false,
+  explainer = "ClipMind finds the moments, ranks them by your taste, and writes your captions.",
+}: {
+  initialUploads: UploadView[];
+  includeMindSteps?: boolean;
+  explainer?: string;
+}) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [uploads, setUploads] = useState(initialUploads);
   const [activeVideoId, setActiveVideoId] = useState<string | null>(
@@ -254,8 +289,7 @@ export function UploadPicker({ initialUploads }: { initialUploads: UploadView[] 
         onChange={handleFileChange}
       />
       <p className={styles.explainer}>
-        ClipMind finds the moments, ranks them by your taste, and writes your
-        captions.
+        {explainer}
       </p>
 
       {progress ? (
@@ -278,7 +312,7 @@ export function UploadPicker({ initialUploads }: { initialUploads: UploadView[] 
 
       {activeUpload ? (
         <section className={styles.checklist} aria-label="Upload pipeline">
-          {STEPS.map((step) => (
+          {visibleSteps(includeMindSteps).map((step) => (
             <ChecklistStep
               currentStage={activeUpload.pipelineStage}
               error={activeUpload.pipelineError}
@@ -503,6 +537,14 @@ function stepIndex(stage: string | null): number {
   return index >= 0 ? index : 0;
 }
 
+function visibleSteps(includeMindSteps: boolean): typeof STEPS {
+  if (includeMindSteps) {
+    return STEPS;
+  }
+
+  return STEPS.filter((step) => NORMAL_STEP_IDS.has(step.id));
+}
+
 function failedStepLine(error: string | null): string {
   const message = errorMessageFromPipeline(error);
   return message || "This step failed.";
@@ -526,6 +568,12 @@ function stageLabel(stage: string): string {
   switch (stage) {
     case "uploaded":
       return "uploaded";
+    case "learning_voice":
+      return "learning voice";
+    case "waking_mind":
+      return "waking Mind";
+    case "teaching_taste":
+      return "teaching taste";
     case "transcribing":
       return "transcribing";
     case "candidates":
@@ -546,6 +594,9 @@ function stageLabel(stage: string): string {
 function isKnownStage(value: string | null): value is PipelineStage {
   return (
     value === "uploaded" ||
+    value === "learning_voice" ||
+    value === "waking_mind" ||
+    value === "teaching_taste" ||
     value === "transcribing" ||
     value === "candidates" ||
     value === "ranking" ||

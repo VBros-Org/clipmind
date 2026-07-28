@@ -26,6 +26,9 @@ export default function Home() {
         </div>
         <div className={styles.actions}>
           <InstallPrompt placement="landing" />
+          <Link className={styles.signupLink} href="/signup">
+            Have an invite? Create your ClipMind
+          </Link>
           <Link className={styles.loginLink} href="/login">
             Log in
           </Link>
