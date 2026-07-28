@@ -17,6 +17,9 @@ const VIDEO_MP4_CONTENT_TYPE = "video/mp4";
 
 export type StorageUploadBody = NonNullable<PutObjectCommandInput["Body"]>;
 export type SourceUploadInput = string | StorageUploadBody;
+export type SourceUploadOptions = {
+  contentLength?: number;
+};
 
 export interface S3ClientLike {
   send(
@@ -37,7 +40,11 @@ export type R2StorageOptions = {
 };
 
 export interface R2Storage {
-  uploadSource(videoId: string, localPathOrStream: SourceUploadInput): Promise<string>;
+  uploadSource(
+    videoId: string,
+    localPathOrStream: SourceUploadInput,
+    options?: SourceUploadOptions,
+  ): Promise<string>;
   presignSourceUrl(key: string, ttlSeconds?: number): Promise<string>;
   uploadRender(clipId: string, stream: StorageUploadBody): Promise<string>;
   probeBuckets(): Promise<StorageProbeResult[]>;
@@ -59,13 +66,14 @@ export function createR2Storage(options: R2StorageOptions = {}): R2Storage {
   const presignSource = options.presignSource ?? defaultSourcePresigner;
 
   return {
-    async uploadSource(videoId, localPathOrStream) {
+    async uploadSource(videoId, localPathOrStream, uploadOptions = {}) {
       const key = sourceKeyForVideo(videoId);
       await putObject(s3Client, {
         Bucket: storageEnv.R2_SOURCES_BUCKET,
         Key: key,
         Body: uploadBodyFromSource(localPathOrStream),
         ContentType: VIDEO_MP4_CONTENT_TYPE,
+        ContentLength: uploadOptions.contentLength,
       });
       return key;
     },
@@ -115,9 +123,14 @@ export function createR2Storage(options: R2StorageOptions = {}): R2Storage {
 export function uploadSource(
   videoId: string,
   localPathOrStream: SourceUploadInput,
-  options?: R2StorageOptions,
+  uploadOptions?: SourceUploadOptions,
+  storageOptions?: R2StorageOptions,
 ): Promise<string> {
-  return createR2Storage(options).uploadSource(videoId, localPathOrStream);
+  return createR2Storage(storageOptions).uploadSource(
+    videoId,
+    localPathOrStream,
+    uploadOptions,
+  );
 }
 
 export function presignSourceUrl(

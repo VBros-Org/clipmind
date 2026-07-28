@@ -40,6 +40,8 @@ export type RecentUpload = {
   id: string;
   label: string;
   status: string;
+  pipelineStage: string;
+  pipelineError: string | null;
   createdAtIso: string;
   clipCount: number;
 };
@@ -211,6 +213,8 @@ export async function loadRecentUploads(
     select: {
       id: true,
       status: true,
+      pipelineStage: true,
+      pipelineError: true,
       createdAt: true,
       clips: {
         select: {
@@ -223,7 +227,9 @@ export async function loadRecentUploads(
   return videos.map((video) => ({
     id: video.id,
     label: formatVideoLabel(video.createdAt),
-    status: video.status,
+    status: displayPipelineStage(video.pipelineStage, video.status),
+    pipelineStage: displayPipelineStage(video.pipelineStage, video.status),
+    pipelineError: video.pipelineError,
     createdAtIso: video.createdAt.toISOString(),
     clipCount: video.clips.length,
   }));
@@ -336,6 +342,24 @@ function formatHourMinute(date: Date): string {
     minute: "2-digit",
     hour12: false,
   }).format(date);
+}
+
+function displayPipelineStage(
+  pipelineStage: string | null,
+  legacyStatus: string,
+): string {
+  if (pipelineStage) {
+    return pipelineStage;
+  }
+
+  switch (legacyStatus) {
+    case "clipped":
+      return "done";
+    case "transcribed":
+      return "candidates";
+    default:
+      return "uploaded";
+  }
 }
 
 function isRecord(value: Prisma.JsonValue): value is Record<string, Prisma.JsonValue> {

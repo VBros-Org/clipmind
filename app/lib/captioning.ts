@@ -8,6 +8,10 @@ import {
 import { buildCaptionClipMessage } from "./prompts/caption-clip";
 
 const MAX_CAPTION_ATTEMPTS = 2;
+const importDb = new Function(
+  "specifier",
+  "return import(specifier)",
+) as (specifier: string) => Promise<typeof import("./db")>;
 const FORBIDDEN_DASH_RE = /[\u2013\u2014]/;
 const INSTAGRAM_FORMAT_HASHTAG_RE = /(^|\s)#[^\s#]+/;
 const INSTAGRAM_FIRST_SENTENCE_END_RE = /[.!?](?=\s|$)/;
@@ -476,7 +480,7 @@ async function createPrismaCaptioningStore(
     return new PrismaCaptioningStore(prismaClient);
   }
 
-  const { prisma } = await import("./db.js");
+  const { prisma } = await importDb("./db.js");
   return new PrismaCaptioningStore(prisma);
 }
 

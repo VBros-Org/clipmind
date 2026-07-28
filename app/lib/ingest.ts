@@ -56,6 +56,12 @@ type IngestVideoOptions = {
   storage?: Pick<R2Storage, "uploadSource" | "presignSourceUrl">;
 };
 
+export type IngestUploadedVideoOptions = {
+  clipServiceClient?: ClipServiceClient;
+  prismaClient?: PrismaClient;
+  storage?: Pick<R2Storage, "presignSourceUrl">;
+};
+
 export type IngestVideoResult = {
   videoId: string;
   contentKey: string;
@@ -200,36 +206,10 @@ export async function ingestVideo(
     },
   });
 
-  await db.$transaction(async (tx) => {
-    await tx.clip.deleteMany({
-      where: {
-        videoId: video.id,
-        status: "candidate",
-      },
-    });
-
-    for (const candidate of candidateResponse.candidates) {
-      await tx.clip.create({
-        data: {
-          videoId: video.id,
-          creatorId,
-          startMs: candidate.startMs,
-          endMs: candidate.endMs,
-          transcript: candidate.transcript,
-          reasons: candidate.reasons === null ? undefined : candidate.reasons,
-          status: "candidate",
-        },
-      });
-    }
-
-    await tx.video.update({
-      where: {
-        id: video.id,
-      },
-      data: {
-        status: "clipped",
-      },
-    });
+  await writeCandidateClips(db, {
+    videoId: video.id,
+    creatorId,
+    candidates: candidateResponse.candidates,
   });
 
   const clipCount = await db.clip.count({
@@ -249,6 +229,74 @@ export async function ingestVideo(
   };
 }
 
+export async function ingestUploadedVideo(
+  videoId: string,
+  options: IngestUploadedVideoOptions = {},
+): Promise<IngestVideoResult> {
+  const db = options.prismaClient ?? prisma;
+  const clipServiceClient = options.clipServiceClient ?? defaultClipServiceClient;
+  const video = await db.video.findUnique({
+    where: {
+      id: videoId,
+    },
+    select: {
+      id: true,
+      creatorId: true,
+      contentKey: true,
+      sourceKey: true,
+      status: true,
+    },
+  });
+
+  if (!video) {
+    throw new Error(`Video ${videoId} does not exist.`);
+  }
+  if (!video.sourceKey) {
+    throw new Error(`Video ${videoId} does not have an uploaded source key.`);
+  }
+  if (!video.contentKey) {
+    throw new Error(`Video ${videoId} does not have a content key.`);
+  }
+
+  const storage = options.storage ?? createR2Storage();
+  const candidateSourceUrl = await storage.presignSourceUrl(video.sourceKey);
+  const candidateResponse = await clipServiceClient.fetchCandidates({
+    kind: "url",
+    sourceUrl: candidateSourceUrl,
+  });
+
+  await db.video.update({
+    where: {
+      id: video.id,
+    },
+    data: {
+      status: "transcribed",
+    },
+  });
+
+  await writeCandidateClips(db, {
+    videoId: video.id,
+    creatorId: video.creatorId,
+    candidates: candidateResponse.candidates,
+  });
+
+  const clipCount = await db.clip.count({
+    where: {
+      videoId: video.id,
+    },
+  });
+
+  return {
+    videoId: video.id,
+    contentKey: video.contentKey,
+    status: "clipped",
+    clipCount,
+    createdClipCount: candidateResponse.candidates.length,
+    createdVideo: false,
+    skippedExisting: false,
+  };
+}
+
 function fetchUrlCandidates(endpoint: URL, sourceUrl: string): Promise<Response> {
   return fetch(endpoint, {
     method: "POST",
@@ -259,6 +307,47 @@ function fetchUrlCandidates(endpoint: URL, sourceUrl: string): Promise<Response>
     body: JSON.stringify({
       source_url: sourceUrl,
     }),
+  });
+}
+
+async function writeCandidateClips(
+  db: PrismaClient,
+  args: {
+    videoId: string;
+    creatorId: string;
+    candidates: readonly ClipServiceCandidate[];
+  },
+): Promise<void> {
+  await db.$transaction(async (tx) => {
+    await tx.clip.deleteMany({
+      where: {
+        videoId: args.videoId,
+        status: "candidate",
+      },
+    });
+
+    for (const candidate of args.candidates) {
+      await tx.clip.create({
+        data: {
+          videoId: args.videoId,
+          creatorId: args.creatorId,
+          startMs: candidate.startMs,
+          endMs: candidate.endMs,
+          transcript: candidate.transcript,
+          reasons: candidate.reasons === null ? undefined : candidate.reasons,
+          status: "candidate",
+        },
+      });
+    }
+
+    await tx.video.update({
+      where: {
+        id: args.videoId,
+      },
+      data: {
+        status: "clipped",
+      },
+    });
   });
 }
 

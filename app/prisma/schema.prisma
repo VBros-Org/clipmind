@@ -24,15 +24,17 @@ model Creator {
 }
 
 model Video {
-  id         String   @id @default(cuid())
-  creatorId  String
-  creator    Creator  @relation(fields: [creatorId], references: [id])
-  sourceUrl  String?
-  sourceKey  String?
-  contentKey String?  @unique
-  status     String   @default("uploaded") // uploaded | transcribed | clipped
-  createdAt  DateTime @default(now())
-  clips      Clip[]
+  id            String   @id @default(cuid())
+  creatorId     String
+  creator       Creator  @relation(fields: [creatorId], references: [id])
+  sourceUrl     String?
+  sourceKey     String?
+  contentKey    String?  @unique
+  status        String   @default("uploaded") // uploaded | transcribed | clipped
+  pipelineStage String? // uploaded | transcribing | candidates | ranking | captions | done | failed
+  pipelineError String?
+  createdAt     DateTime @default(now())
+  clips         Clip[]
 }
 
 enum ClipStatus {
