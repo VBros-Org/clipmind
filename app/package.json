@@ -22,6 +22,8 @@
     "test:storage": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env --test dist/tests/storage.test.js dist/tests/render.test.js",
     "preverify:creator": "prisma generate",
     "verify:creator": "tsc -p tsconfig.scripts.json && node --env-file=.env dist/scripts/verify-creator.js",
+    "precaption:clip": "prisma generate",
+    "caption:clip": "tsc -p tsconfig.scripts.json && node --env-file=.env dist/scripts/caption-clip.js",
     "prerank:clips": "prisma generate",
     "rank:clips": "tsc -p tsconfig.scripts.json && node --env-file=.env dist/scripts/rank-clips.js",
     "preschedule:tick": "prisma generate",
@@ -30,6 +32,8 @@
     "mark:posted": "tsc -p tsconfig.scripts.json && node --env-file=.env dist/scripts/mark-posted.js",
     "pretest:ranking": "prisma generate",
     "test:ranking": "tsc -p tsconfig.scripts.json && node --test dist/tests/ranking.test.js",
+    "pretest:captioning": "prisma generate",
+    "test:captioning": "tsc -p tsconfig.scripts.json && node --test dist/tests/captioning.test.js",
     "pretest:scheduling": "prisma generate",
     "test:scheduling": "tsc -p tsconfig.scripts.json && node --test dist/tests/scheduling.test.js",
     "test:scheduling:db": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env dist/tests/scheduling-db.test.js"
