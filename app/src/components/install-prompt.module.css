@@ -1,0 +1,113 @@
+.landing,
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.landing {
+  justify-content: center;
+}
+
+.banner {
+  justify-content: space-between;
+  border: 1px solid rgba(95, 179, 179, 0.28);
+  border-radius: 8px;
+  background: rgba(7, 10, 15, 0.58);
+  padding: 12px;
+}
+
+.bannerText {
+  margin: 0;
+  color: #dbe7ed;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.installButton,
+.closeButton {
+  min-height: 44px;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.installButton {
+  min-width: 172px;
+  background: #5fb3b3;
+  color: #071012;
+  padding: 0 18px;
+}
+
+.installButton:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.closeButton {
+  width: 100%;
+  background: #f0c36a;
+  color: #11140f;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.62);
+  padding: 14px;
+}
+
+.sheet {
+  display: grid;
+  width: min(100%, 420px);
+  gap: 18px;
+  border: 1px solid rgba(247, 242, 232, 0.14);
+  border-radius: 8px;
+  background: #10161f;
+  padding: 20px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.34);
+}
+
+.sheetTitle {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.15;
+}
+
+.steps {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 12px;
+  align-items: center;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 12px;
+  color: #eef6f7;
+  font-weight: 800;
+}
+
+.stepIcon {
+  width: 42px;
+  height: 42px;
+  color: #7fd1c7;
+}
+
+@media (min-width: 720px) {
+  .overlay {
+    align-items: center;
+  }
+}

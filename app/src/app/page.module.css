@@ -1,0 +1,77 @@
+.screen {
+  display: flex;
+  min-height: 100dvh;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.hero {
+  display: grid;
+  width: min(100%, 620px);
+  gap: 24px;
+  justify-items: center;
+  text-align: center;
+}
+
+.icon {
+  width: 112px;
+  height: 112px;
+  border-radius: 28px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.36);
+}
+
+.copy {
+  display: grid;
+  gap: 12px;
+}
+
+.title {
+  margin: 0;
+  font-size: 52px;
+  line-height: 0.96;
+}
+
+.line {
+  max-width: 560px;
+  margin: 0;
+  color: #d5e1e8;
+  font-size: 19px;
+  line-height: 1.45;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+}
+
+.loginLink {
+  display: inline-flex;
+  min-height: 44px;
+  min-width: 112px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(247, 242, 232, 0.22);
+  border-radius: 8px;
+  color: #f7f2e8;
+  font-weight: 800;
+}
+
+@media (max-width: 380px) {
+  .title {
+    font-size: 44px;
+  }
+
+  .line {
+    font-size: 17px;
+  }
+}
+
+@media (min-width: 720px) {
+  .title {
+    font-size: 88px;
+  }
+}

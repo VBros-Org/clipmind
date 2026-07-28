@@ -7,6 +7,7 @@ import {
   loadCreatorSessionForAccessCode,
 } from "../../../lib/review-auth";
 import { loadReviewVideos } from "../../../lib/review";
+import { InstallPrompt } from "../../components/InstallPrompt";
 
 import styles from "./review.module.css";
 
@@ -29,6 +30,7 @@ export default async function ReviewPage() {
           <p className={styles.eyebrow}>Review</p>
           <h1 className={styles.title}>Your videos</h1>
           <p className={styles.muted}>Newest videos are first.</p>
+          <InstallPrompt placement="banner" />
         </header>
 
         <section className={styles.list}>
