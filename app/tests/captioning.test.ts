@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   captionClip,
   findCaptionSanityError,
+  formatInstagramVariantForWrite,
   parseMindCaptionReply,
   type CaptionedClip,
   type CaptioningClip,
@@ -36,6 +37,38 @@ test("parseMindCaptionReply rejects missing or blank platform keys", () => {
     ),
     null,
   );
+});
+
+test("formatInstagramVariantForWrite splits single-line Instagram text", () => {
+  assert.equal(
+    formatInstagramVariantForWrite(
+      "Have you ever seen this save?  The copper hoe had no right to work.  #Minecraft #ClutchSave",
+    ),
+    [
+      "Have you ever seen this save?",
+      "The copper hoe had no right to work.",
+      "",
+      "#Minecraft #ClutchSave",
+    ].join("\n"),
+  );
+});
+
+test("formatInstagramVariantForWrite leaves already-formatted Instagram text unchanged", () => {
+  const caption = [
+    "Have you ever seen this save?",
+    "The copper hoe had no right to work.",
+    "",
+    "#Minecraft #ClutchSave",
+  ].join("\n");
+
+  assert.equal(formatInstagramVariantForWrite(caption), caption);
+});
+
+test("formatInstagramVariantForWrite leaves no-hashtag Instagram text unchanged", () => {
+  const caption =
+    "Have you ever seen this save?  The copper hoe had no right to work.";
+
+  assert.equal(formatInstagramVariantForWrite(caption), caption);
 });
 
 test("captionClip rejects dash characters and retries with a corrective note", async () => {
@@ -79,7 +112,7 @@ test("captionClip rejects near-identical TikTok and Instagram variants and retri
   const store = new MemoryCaptioningStore(memoryClip("clip-similar"));
   const cleanVariants = variants({
     instagram:
-      "bro the copper hoe actually saved me\nlast second save had no business working.\n#Minecraft #ClutchSave",
+      "bro the copper hoe actually saved me\nlast second save had no business working.\n\n#Minecraft #ClutchSave",
   });
   const mindsClient = fakeMindsClient([
     JSON.stringify(
@@ -112,6 +145,33 @@ test("captionClip rejects near-identical TikTok and Instagram variants and retri
     mindsClient.calls[1]?.messageText ?? "",
     /Instagram must have a first-line hook/,
   );
+});
+
+test("captionClip formats Instagram before writing post-copy variants", async () => {
+  const store = new MemoryCaptioningStore(memoryClip("clip-format"));
+  const rawVariants = variants({
+    instagram:
+      "Have you ever seen this save?  The copper hoe had no right to work.  #Minecraft #ClutchSave",
+  });
+  const formattedVariants = variants({
+    instagram: [
+      "Have you ever seen this save?",
+      "The copper hoe had no right to work.",
+      "",
+      "#Minecraft #ClutchSave",
+    ].join("\n"),
+  });
+  const mindsClient = fakeMindsClient([JSON.stringify(rawVariants)]);
+
+  const result = await captionClip("clip-format", {
+    store,
+    mindsClient,
+  });
+
+  assert.equal(result.status, "captioned");
+  assert.deepEqual(result.variants, formattedVariants);
+  assert.deepEqual(store.writeCalls[0]?.variants, formattedVariants);
+  assert.deepEqual(store.clip.postCopyVariants, formattedVariants);
 });
 
 test("captionClip returns FAILED after missing keys and writes nothing", async () => {
@@ -341,7 +401,7 @@ function variants(
     youtube: "Copper Hoe Saves The Run",
     tiktok: "bro the copper hoe actually saved me #Minecraft #ClutchSave",
     instagram:
-      "bro the copper hoe actually saved me\nthat last second save should not be real.\n#Minecraft #ClutchSave",
+      "bro the copper hoe actually saved me\nthat last second save should not be real.\n\n#Minecraft #ClutchSave",
     ...overrides,
   };
 }

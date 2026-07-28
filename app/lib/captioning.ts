@@ -9,6 +9,9 @@ import { buildCaptionClipMessage } from "./prompts/caption-clip";
 
 const MAX_CAPTION_ATTEMPTS = 2;
 const FORBIDDEN_DASH_RE = /[\u2013\u2014]/;
+const INSTAGRAM_FORMAT_HASHTAG_RE = /(^|\s)#[^\s#]+/;
+const INSTAGRAM_FIRST_SENTENCE_END_RE = /[.!?](?=\s|$)/;
+const INSTAGRAM_REPEATED_INLINE_SPACE_RE = /[ \t]{2,}/g;
 const PLATFORM_COMPARISON_HASHTAG_RE = /(^|\s)#[^\s#]+/g;
 const PLATFORM_COMPARISON_NOISE_RE = /[\s.,!?;:()[\]{}"'-]+/g;
 const NEAR_IDENTICAL_PLATFORM_SIMILARITY = 0.92;
@@ -152,9 +155,10 @@ export async function captionClip(
       continue;
     }
 
+    const variantsForWrite = formatPostCopyVariantsForWrite(parsed);
     const captionedClip = await store.writePostCopy({
       clip: request.clip,
-      variants: parsed,
+      variants: variantsForWrite,
     });
     assertControlFieldsUnchanged(request.clip, captionedClip);
 
@@ -165,7 +169,7 @@ export async function captionClip(
       videoId: request.clip.videoId,
       mindId,
       attempts: attempt,
-      variants: parsed,
+      variants: variantsForWrite,
     };
   }
 
@@ -218,6 +222,63 @@ export function findCaptionSanityError(
   }
 
   return null;
+}
+
+export function formatInstagramVariantForWrite(text: string): string {
+  if (!INSTAGRAM_FORMAT_HASHTAG_RE.test(text)) {
+    return text;
+  }
+
+  const normalizedText = text
+    .replace(/\r\n?/g, "\n")
+    .replace(INSTAGRAM_REPEATED_INLINE_SPACE_RE, " ")
+    .split("\n")
+    .map((line) => line.trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  const hashtagMatch = normalizedText.match(INSTAGRAM_FORMAT_HASHTAG_RE);
+  if (!hashtagMatch || hashtagMatch.index === undefined) {
+    return text;
+  }
+
+  const hashtagIndex =
+    hashtagMatch.index + (hashtagMatch[1] ? hashtagMatch[1].length : 0);
+  const body = normalizedText.slice(0, hashtagIndex).trim();
+  const hashtags = normalizedText.slice(hashtagIndex).trim();
+
+  if (!body) {
+    return hashtags;
+  }
+
+  return `${formatInstagramBodyForWrite(body)}\n\n${hashtags}`;
+}
+
+function formatPostCopyVariantsForWrite(
+  variants: PostCopyVariants,
+): PostCopyVariants {
+  return {
+    ...variants,
+    instagram: formatInstagramVariantForWrite(variants.instagram),
+  };
+}
+
+function formatInstagramBodyForWrite(body: string): string {
+  if (body.includes("\n")) {
+    return body;
+  }
+
+  const firstSentenceEnd = body.match(INSTAGRAM_FIRST_SENTENCE_END_RE);
+  if (!firstSentenceEnd || firstSentenceEnd.index === undefined) {
+    return body;
+  }
+
+  const splitIndex = firstSentenceEnd.index + firstSentenceEnd[0].length;
+  const hook = body.slice(0, splitIndex).trim();
+  const story = body.slice(splitIndex).trim();
+
+  return story ? `${hook}\n${story}` : hook;
 }
 
 function findPlatformSimilarityError(
@@ -479,6 +540,7 @@ class PrismaCaptioningStore implements CaptioningStore {
 
   async writePostCopy(args: CaptioningWrite): Promise<CaptionedClip> {
     return this.db.$transaction(async (tx) => {
+      const variants = formatPostCopyVariantsForWrite(args.variants);
       const before = await tx.clip.findUnique({
         where: {
           id: args.clip.id,
@@ -501,8 +563,8 @@ class PrismaCaptioningStore implements CaptioningStore {
           id: args.clip.id,
         },
         data: {
-          postCopy: args.variants.tiktok,
-          postCopyVariants: toPrismaJson(args.variants),
+          postCopy: variants.tiktok,
+          postCopyVariants: toPrismaJson(variants),
         },
         select: {
           id: true,
@@ -525,7 +587,7 @@ class PrismaCaptioningStore implements CaptioningStore {
         mindRank: updated.mindRank,
         mindRankReason: updated.mindRankReason,
         postCopy: updated.postCopy,
-        postCopyVariants: args.variants,
+        postCopyVariants: variants,
       };
     });
   }
