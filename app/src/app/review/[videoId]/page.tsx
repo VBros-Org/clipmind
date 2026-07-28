@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 
 import { loadAppFrameData } from "../../../../lib/app-overview";
 import { loadReviewGroup, type ReviewVideoGroup } from "../../../../lib/review";
+import { formatVideoLabel } from "../../../../lib/video-label";
 import { AppShell } from "../../AppShell";
 import { requireCreatorSession } from "../../app-session";
 import {
@@ -38,7 +39,7 @@ export default async function ReviewVideoPage({ params }: ReviewVideoPageProps) 
             Back to Review
           </Link>
           <p className={styles.eyebrow}>Review</p>
-          <h1 className={styles.title}>{group.sourceUrl ?? group.sourceKey ?? group.id}</h1>
+          <h1 className={styles.title}>{formatVideoLabel(group.createdAt)}</h1>
           <p className={styles.subhead}>Clips are ordered by Mind rank.</p>
         </header>
         <ReviewBoard groups={[serializeGroup(group)]} />
@@ -50,7 +51,7 @@ export default async function ReviewVideoPage({ params }: ReviewVideoPageProps) 
 function serializeGroup(group: ReviewVideoGroup): ReviewVideoGroupView {
   return {
     id: group.id,
-    title: group.sourceUrl ?? group.sourceKey ?? group.id,
+    title: formatVideoLabel(group.createdAt),
     status: group.status,
     createdAt: group.createdAt.toISOString(),
     totalClips: group.totalClips,

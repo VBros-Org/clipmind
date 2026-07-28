@@ -1,5 +1,6 @@
 import { loadAppFrameData } from "../../../lib/app-overview";
 import { loadReviewGroups, type ReviewVideoGroup } from "../../../lib/review";
+import { formatVideoLabel } from "../../../lib/video-label";
 import { AppShell } from "../AppShell";
 import { requireCreatorSession } from "../app-session";
 
@@ -44,7 +45,7 @@ export default async function ReviewPage({ searchParams }: ReviewPageProps) {
 function serializeGroup(group: ReviewVideoGroup): ReviewVideoGroupView {
   return {
     id: group.id,
-    title: group.sourceUrl ?? group.sourceKey ?? group.id,
+    title: formatVideoLabel(group.createdAt),
     status: group.status,
     createdAt: group.createdAt.toISOString(),
     totalClips: group.totalClips,

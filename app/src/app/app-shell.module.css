@@ -3,7 +3,7 @@
   background: var(--cm-bg);
   color: var(--cm-text);
   padding-block-start: var(--cm-safe-top);
-  padding-block-end: calc(var(--cm-bottom-nav-height) + var(--cm-space-4));
+  padding-block-end: calc(var(--cm-bottom-nav-height) + var(--cm-space-6));
 }
 
 .content {

@@ -103,9 +103,9 @@
   width: var(--cm-thumb-strip-width);
   height: var(--cm-thumb-strip-height);
   overflow: hidden;
-  border: var(--cm-border-width) solid var(--cm-border);
+  border: var(--cm-border-width) solid var(--cm-border-strong);
   border-radius: var(--cm-radius-card);
-  background: var(--cm-bg-deep);
+  background: var(--cm-surface);
 }
 
 .thumbVideo {
@@ -113,19 +113,15 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-  background: var(--cm-bg-deep);
+  background: var(--cm-surface);
 }
 
 .poster {
-  display: grid;
+  display: block;
   width: 100%;
   height: 100%;
-  place-content: center;
-  gap: var(--cm-space-2);
-  color: var(--cm-text-muted);
-  font-size: var(--cm-font-secondary);
-  font-weight: 900;
-  text-align: center;
+  background: var(--cm-surface);
+  box-shadow: inset 0 0 0 var(--cm-border-width) var(--cm-border);
 }
 
 .rankBadge,

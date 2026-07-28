@@ -8,6 +8,7 @@ import {
   type RunwayState,
 } from "./home-rules";
 import { SCHEDULE_ANCHOR_HOUR_UTC } from "./scheduling";
+import { formatVideoLabel } from "./video-label";
 
 export type { HomeNudge, RunwayState } from "./home-rules";
 
@@ -153,9 +154,7 @@ export async function loadHomeOverview(
         scheduledFor: true,
         video: {
           select: {
-            sourceUrl: true,
-            sourceKey: true,
-            id: true,
+            createdAt: true,
           },
         },
       },
@@ -211,8 +210,6 @@ export async function loadRecentUploads(
     take: 3,
     select: {
       id: true,
-      sourceUrl: true,
-      sourceKey: true,
       status: true,
       createdAt: true,
       clips: {
@@ -225,7 +222,7 @@ export async function loadRecentUploads(
 
   return videos.map((video) => ({
     id: video.id,
-    label: labelFromSource(video),
+    label: formatVideoLabel(video.createdAt),
     status: video.status,
     createdAtIso: video.createdAt.toISOString(),
     clipCount: video.clips.length,
@@ -274,9 +271,7 @@ function toNextScheduledClip(clip: {
   postCopyVariants: Prisma.JsonValue;
   scheduledFor: Date | null;
   video: {
-    sourceUrl: string | null;
-    sourceKey: string | null;
-    id: string;
+    createdAt: Date;
   };
 }): NextScheduledClip {
   return {
@@ -285,7 +280,7 @@ function toNextScheduledClip(clip: {
     renderedUrl: clip.renderedUrl,
     scheduledForIso: clip.scheduledFor?.toISOString() ?? "",
     hasCaptions: hasPostCopyVariants(clip.postCopyVariants),
-    label: labelFromSource(clip.video),
+    label: formatVideoLabel(clip.video.createdAt),
   };
 }
 
@@ -333,14 +328,6 @@ function clampHour(hour: number): number {
   }
 
   return Math.min(23, Math.max(0, Math.trunc(hour)));
-}
-
-function labelFromSource(source: {
-  sourceUrl: string | null;
-  sourceKey: string | null;
-  id: string;
-}): string {
-  return source.sourceUrl ?? source.sourceKey ?? source.id;
 }
 
 function formatHourMinute(date: Date): string {

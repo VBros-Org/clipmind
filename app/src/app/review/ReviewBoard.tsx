@@ -166,6 +166,7 @@ function ClipCard({
   return (
     <button
       className={`${styles.clipCard} ${isRejected ? styles.rejectedCard : ""}`}
+      data-testid="clip-card"
       onClick={() => openClip(clip.id)}
       type="button"
     >
@@ -179,15 +180,12 @@ function ClipCard({
             src={clip.renderedUrl}
           />
         ) : (
-          <span className={styles.poster}>
-            <span>{rankBadge(clip.mindRank)}</span>
-            <span>{formatDuration(clip.startMs, clip.endMs)}</span>
-          </span>
+          <span className={styles.poster} aria-hidden="true" />
         )}
         <span className={styles.rankBadge} data-testid="rank-badge">
           {rankBadge(clip.mindRank)}
         </span>
-        <span className={styles.durationChip}>
+        <span className={styles.durationChip} data-testid="duration-chip">
           {formatDuration(clip.startMs, clip.endMs)}
         </span>
         {isRendering ? <span className={styles.renderChip}>rendering</span> : null}
