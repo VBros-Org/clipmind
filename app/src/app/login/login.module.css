@@ -1,0 +1,72 @@
+.screen {
+  display: flex;
+  min-height: 100dvh;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.panel {
+  width: min(100%, 420px);
+  border: 1px solid rgba(247, 242, 232, 0.14);
+  border-radius: 8px;
+  background: rgba(13, 17, 23, 0.84);
+  padding: 24px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.3);
+}
+
+.title {
+  margin: 0;
+  font-size: 32px;
+  line-height: 1.05;
+}
+
+.copy {
+  margin: 10px 0 22px;
+  color: #bac8d4;
+  line-height: 1.5;
+}
+
+.form {
+  display: grid;
+  gap: 14px;
+}
+
+.label {
+  display: grid;
+  gap: 8px;
+  color: #e8edf2;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.input {
+  width: 100%;
+  border: 1px solid rgba(247, 242, 232, 0.22);
+  border-radius: 8px;
+  background: #070a0f;
+  color: #f7f2e8;
+  padding: 14px 16px;
+  outline: none;
+}
+
+.input:focus {
+  border-color: #5fb3b3;
+  box-shadow: 0 0 0 3px rgba(95, 179, 179, 0.16);
+}
+
+.button {
+  min-height: 48px;
+  border: 0;
+  border-radius: 8px;
+  background: #5fb3b3;
+  color: #071012;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.error {
+  margin: 0;
+  color: #ffb4a7;
+  font-size: 14px;
+}

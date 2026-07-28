@@ -41,7 +41,7 @@ export const CLIP_STATUS_TRANSITIONS: Record<
   ClipSchedulingStatus,
   readonly ClipSchedulingStatus[]
 > = {
-  candidate: [],
+  candidate: ["accepted", "rejected"],
   accepted: ["scheduled"],
   rejected: [],
   scheduled: ["posted"],
@@ -54,6 +54,19 @@ export function assertClipStatusTransition(
 ): void {
   if (!CLIP_STATUS_TRANSITIONS[from].includes(to)) {
     throw new Error(`Invalid clip status transition ${from}->${to}.`);
+  }
+}
+
+export function toClipSchedulingStatus(status: string): ClipSchedulingStatus {
+  switch (status) {
+    case "candidate":
+    case "accepted":
+    case "rejected":
+    case "scheduled":
+    case "posted":
+      return status;
+    default:
+      throw new Error(`Unknown clip status ${status}.`);
   }
 }
 

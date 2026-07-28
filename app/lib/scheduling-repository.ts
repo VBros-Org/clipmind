@@ -5,6 +5,7 @@ import {
   assertClipStatusTransition,
   computeNextSlot,
   pickNextClip,
+  toClipSchedulingStatus,
   type ClipSchedulingStatus,
   type SchedulingClip,
   type SchedulingHistoryClip,
@@ -278,19 +279,6 @@ function toSchedulingHistoryClip(clip: {
     scheduledFor: clip.scheduledFor,
     postedAt: clip.postedAt,
   };
-}
-
-function toClipSchedulingStatus(status: string): ClipSchedulingStatus {
-  switch (status) {
-    case "candidate":
-    case "accepted":
-    case "rejected":
-    case "scheduled":
-    case "posted":
-      return status;
-    default:
-      throw new Error(`Unknown clip status ${status}.`);
-  }
 }
 
 function buildRotationState(
