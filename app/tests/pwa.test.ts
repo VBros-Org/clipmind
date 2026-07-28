@@ -28,7 +28,7 @@ test("manifest has the required PWA fields and icon files", async () => {
 
   assert.equal(manifest.name, "ClipMind");
   assert.equal(manifest.short_name, "ClipMind");
-  assert.equal(manifest.start_url, "/review");
+  assert.equal(manifest.start_url, "/home");
   assert.equal(manifest.scope, "/");
   assert.equal(manifest.display, "standalone");
   assert.equal(manifest.theme_color, "#5fb3b3");
@@ -61,6 +61,7 @@ test("service worker is versioned and keeps media out of cache handling", async 
   assert.match(serviceWorker, /function networkFirst/);
   assert.match(serviceWorker, /function cacheFirst/);
   assert.match(serviceWorker, /function isMediaRequest/);
+  assert.match(serviceWorker, /\/home/);
   assert.match(serviceWorker, /\/review/);
 });
 

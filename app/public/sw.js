@@ -4,7 +4,10 @@ const DATA_CACHE = "clipmind-data-v1";
 const PRECACHE_URLS = [
   "/",
   "/login",
+  "/home",
+  "/upload",
   "/review",
+  "/rhythm",
   "/manifest.webmanifest",
   "/icons/clipmind-192.png",
   "/icons/clipmind-512.png",

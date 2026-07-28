@@ -3,75 +3,75 @@
   min-height: 100dvh;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: var(--cm-space-5);
 }
 
 .hero {
   display: grid;
-  width: min(100%, 620px);
-  gap: 24px;
+  width: min(100%, var(--cm-landing-panel));
+  gap: var(--cm-space-5);
   justify-items: center;
   text-align: center;
 }
 
 .icon {
-  width: 112px;
-  height: 112px;
-  border-radius: 28px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.36);
+  width: var(--cm-icon-landing);
+  height: var(--cm-icon-landing);
+  border-radius: calc(var(--cm-radius-card) + var(--cm-radius-action));
+  box-shadow: var(--cm-shadow-icon);
 }
 
 .copy {
   display: grid;
-  gap: 12px;
+  gap: var(--cm-space-3);
 }
 
 .title {
   margin: 0;
-  font-size: 52px;
+  font-size: calc(var(--cm-font-page) + var(--cm-space-5));
   line-height: 0.96;
 }
 
 .line {
-  max-width: 560px;
+  max-width: calc(var(--cm-content-max) - var(--cm-space-6));
   margin: 0;
-  color: #d5e1e8;
-  font-size: 19px;
+  color: var(--cm-text-soft);
+  font-size: var(--cm-font-body);
   line-height: 1.45;
 }
 
 .actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: var(--cm-space-3);
   align-items: center;
   justify-content: center;
 }
 
 .loginLink {
   display: inline-flex;
-  min-height: 44px;
-  min-width: 112px;
+  min-height: var(--cm-touch-target);
+  min-width: var(--cm-icon-landing);
   align-items: center;
   justify-content: center;
-  border: 1px solid rgba(247, 242, 232, 0.22);
-  border-radius: 8px;
-  color: #f7f2e8;
+  border: var(--cm-border-width) solid var(--cm-border-strong);
+  border-radius: var(--cm-radius-small);
+  color: var(--cm-text);
   font-weight: 800;
 }
 
-@media (max-width: 380px) {
+@media (max-width: 23.75rem) {
   .title {
-    font-size: 44px;
+    font-size: calc(var(--cm-font-page) + var(--cm-space-4));
   }
 
   .line {
-    font-size: 17px;
+    font-size: var(--cm-font-body);
   }
 }
 
-@media (min-width: 720px) {
+@media (min-width: 45rem) {
   .title {
-    font-size: 88px;
+    font-size: calc(var(--cm-font-runway) + var(--cm-space-4));
   }
 }

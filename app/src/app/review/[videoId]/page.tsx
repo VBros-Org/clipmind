@@ -1,15 +1,16 @@
 import Link from "next/link";
-import { cookies } from "next/headers";
-import { notFound, redirect } from "next/navigation";
+import { notFound } from "next/navigation";
 
+import { loadAppFrameData } from "../../../../lib/app-overview";
+import { loadReviewGroup, type ReviewVideoGroup } from "../../../../lib/review";
+import { AppShell } from "../../AppShell";
+import { requireCreatorSession } from "../../app-session";
 import {
-  CREATOR_ACCESS_COOKIE,
-  loadCreatorSessionForAccessCode,
-} from "../../../../lib/review-auth";
-import { loadReviewVideo } from "../../../../lib/review";
-
-import { ReviewClipList, type ReviewClipView } from "./ReviewClipList";
-import styles from "./video.module.css";
+  ReviewBoard,
+  type ReviewClipView,
+  type ReviewVideoGroupView,
+} from "../ReviewBoard";
+import styles from "../review.module.css";
 
 type ReviewVideoPageProps = {
   params: Promise<{
@@ -20,64 +21,47 @@ type ReviewVideoPageProps = {
 export default async function ReviewVideoPage({ params }: ReviewVideoPageProps) {
   const session = await requireCreatorSession();
   const { videoId } = await params;
-  const video = await loadReviewVideo(session.creatorId, videoId);
-  if (!video) {
+  const [frame, group] = await Promise.all([
+    loadAppFrameData(session.creatorId),
+    loadReviewGroup(session.creatorId, videoId),
+  ]);
+
+  if (!group) {
     notFound();
   }
 
   return (
-    <main className={styles.screen}>
-      <div className={styles.shell}>
-        <nav className={styles.topBar}>
-          <Link className={styles.back} href="/review">
-            Back to videos
+    <AppShell activeTab="review" reviewCount={frame.reviewCount}>
+      <section className={styles.pageStack}>
+        <header className={styles.header}>
+          <Link className={styles.emptyAction} href="/review">
+            Back to Review
           </Link>
-        </nav>
-
-        <header>
-          <h1 className={styles.title}>
-            {video.sourceUrl ?? video.sourceKey ?? video.id}
-          </h1>
-          <p className={styles.subhead}>
-            Candidate clips are ordered by Mind rank.
-          </p>
+          <p className={styles.eyebrow}>Review</p>
+          <h1 className={styles.title}>{group.sourceUrl ?? group.sourceKey ?? group.id}</h1>
+          <p className={styles.subhead}>Clips are ordered by Mind rank.</p>
         </header>
-
-        <ReviewClipList
-          clips={video.clips.map(serializeClip)}
-          previewSourceUrl={video.previewSourceUrl}
-        />
-      </div>
-    </main>
+        <ReviewBoard groups={[serializeGroup(group)]} />
+      </section>
+    </AppShell>
   );
 }
 
-async function requireCreatorSession() {
-  const cookieStore = await cookies();
-  const session = await loadCreatorSessionForAccessCode(
-    cookieStore.get(CREATOR_ACCESS_COOKIE)?.value,
-  );
-  if (!session) {
-    redirect("/login");
-  }
-
-  return session;
+function serializeGroup(group: ReviewVideoGroup): ReviewVideoGroupView {
+  return {
+    id: group.id,
+    title: group.sourceUrl ?? group.sourceKey ?? group.id,
+    status: group.status,
+    createdAt: group.createdAt.toISOString(),
+    totalClips: group.totalClips,
+    clips: group.clips.map(serializeClip),
+  };
 }
 
-function serializeClip(clip: {
-  id: string;
-  status: ReviewClipView["status"];
-  startMs: number;
-  endMs: number;
-  renderedUrl: string | null;
-  postCopyVariants: ReviewClipView["postCopyVariants"];
-  transcript: string | null;
-  mindRank: number | null;
-  mindRankReason: string | null;
-  createdAt: Date;
-}): ReviewClipView {
+function serializeClip(clip: ReviewVideoGroup["clips"][number]): ReviewClipView {
   return {
     id: clip.id,
+    videoId: clip.videoId,
     status: clip.status,
     startMs: clip.startMs,
     endMs: clip.endMs,

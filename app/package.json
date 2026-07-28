@@ -39,7 +39,7 @@
     "pretest:captioning": "prisma generate",
     "test:captioning": "tsc -p tsconfig.scripts.json && node --test dist/tests/captioning.test.js",
     "pretest:scheduling": "prisma generate",
-    "test:scheduling": "tsc -p tsconfig.scripts.json && node --test dist/tests/scheduling.test.js",
+    "test:scheduling": "tsc -p tsconfig.scripts.json && node --test dist/tests/scheduling.test.js dist/tests/home-rules.test.js",
     "test:scheduling:db": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env dist/tests/scheduling-db.test.js",
     "test:review": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env --test dist/tests/review-api.test.js"
   },

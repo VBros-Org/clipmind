@@ -54,6 +54,17 @@ export type ReviewVideoDetail = {
   clips: ReviewClip[];
 };
 
+export type ReviewVideoGroup = {
+  id: string;
+  sourceUrl: string | null;
+  sourceKey: string | null;
+  status: string;
+  createdAt: Date;
+  counts: Record<ClipSchedulingStatus, number>;
+  totalClips: number;
+  clips: ReviewClip[];
+};
+
 export type ReviewClipApiPayload = ReviewClip & {
   previewSourceUrl?: string | null;
 };
@@ -181,6 +192,64 @@ export async function loadReviewVideo(
     previewSourceUrl,
     clips: video.clips.map(toReviewClip).sort(compareReviewClips),
   };
+}
+
+export async function loadReviewGroups(
+  creatorId: string,
+  options: ReviewRepositoryOptions = {},
+): Promise<ReviewVideoGroup[]> {
+  const db = options.prismaClient ?? prisma;
+  const videos = await db.video.findMany({
+    where: {
+      creatorId,
+    },
+    orderBy: [
+      {
+        createdAt: "desc",
+      },
+      {
+        id: "asc",
+      },
+    ],
+    select: {
+      id: true,
+      sourceUrl: true,
+      sourceKey: true,
+      status: true,
+      createdAt: true,
+      clips: {
+        select: reviewClipSelect,
+      },
+    },
+  });
+
+  return videos.map(toReviewVideoGroup);
+}
+
+export async function loadReviewGroup(
+  creatorId: string,
+  videoId: string,
+  options: ReviewRepositoryOptions = {},
+): Promise<ReviewVideoGroup | null> {
+  const db = options.prismaClient ?? prisma;
+  const video = await db.video.findFirst({
+    where: {
+      id: videoId,
+      creatorId,
+    },
+    select: {
+      id: true,
+      sourceUrl: true,
+      sourceKey: true,
+      status: true,
+      createdAt: true,
+      clips: {
+        select: reviewClipSelect,
+      },
+    },
+  });
+
+  return video ? toReviewVideoGroup(video) : null;
 }
 
 export async function loadReviewClip(
@@ -492,6 +561,44 @@ function compareReviewClips(left: ReviewClip, right: ReviewClip): number {
   }
 
   return left.id.localeCompare(right.id);
+}
+
+function toReviewVideoGroup(video: {
+  id: string;
+  sourceUrl: string | null;
+  sourceKey: string | null;
+  status: string;
+  createdAt: Date;
+  clips: Array<{
+    id: string;
+    videoId: string;
+    status: string;
+    startMs: number;
+    endMs: number;
+    renderedUrl: string | null;
+    postCopyVariants: Prisma.JsonValue;
+    transcript: string | null;
+    mindRank: number | null;
+    mindRankReason: string | null;
+    createdAt: Date;
+  }>;
+}): ReviewVideoGroup {
+  const clips = video.clips.map(toReviewClip).sort(compareReviewClips);
+  const counts = emptyStatusCounts();
+  for (const clip of clips) {
+    counts[clip.status] += 1;
+  }
+
+  return {
+    id: video.id,
+    sourceUrl: video.sourceUrl,
+    sourceKey: video.sourceKey,
+    status: video.status,
+    createdAt: video.createdAt,
+    counts,
+    totalClips: clips.length,
+    clips,
+  };
 }
 
 function emptyStatusCounts(): Record<ClipSchedulingStatus, number> {
