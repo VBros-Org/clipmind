@@ -75,6 +75,45 @@ test("captionClip rejects dash characters and retries with a corrective note", a
   );
 });
 
+test("captionClip rejects near-identical TikTok and Instagram variants and retries", async () => {
+  const store = new MemoryCaptioningStore(memoryClip("clip-similar"));
+  const cleanVariants = variants({
+    instagram:
+      "bro the copper hoe actually saved me\nlast second save had no business working.\n#Minecraft #ClutchSave",
+  });
+  const mindsClient = fakeMindsClient([
+    JSON.stringify(
+      variants({
+        tiktok:
+          "okay so this is the moment everything went wrong and the copper hoe saved me #Minecraft #ClutchSave",
+        instagram:
+          "have you ever seen a copper hoe save the run? okay so this is the moment everything went wrong and the copper hoe saved me #Minecraft #MinecraftFail",
+      }),
+    ),
+    JSON.stringify(cleanVariants),
+  ]);
+
+  const result = await captionClip("clip-similar", {
+    store,
+    mindsClient,
+  });
+
+  assert.equal(result.status, "captioned");
+  assert.equal(result.attempts, 2);
+  assert.deepEqual(result.variants, cleanVariants);
+  assert.equal(store.writeCalls.length, 1);
+  assert.equal(store.clip.postCopy, cleanVariants.tiktok);
+  assert.deepEqual(store.clip.postCopyVariants, cleanVariants);
+  assert.match(
+    mindsClient.calls[1]?.messageText ?? "",
+    /near-identical/,
+  );
+  assert.match(
+    mindsClient.calls[1]?.messageText ?? "",
+    /Instagram must have a first-line hook/,
+  );
+});
+
 test("captionClip returns FAILED after missing keys and writes nothing", async () => {
   const store = new MemoryCaptioningStore(memoryClip("clip-missing"));
   const mindsClient = fakeMindsClient([
@@ -301,7 +340,8 @@ function variants(
   return {
     youtube: "Copper Hoe Saves The Run",
     tiktok: "bro the copper hoe actually saved me #Minecraft #ClutchSave",
-    instagram: "bro the copper hoe actually saved me\n#Minecraft #ClutchSave",
+    instagram:
+      "bro the copper hoe actually saved me\nthat last second save should not be real.\n#Minecraft #ClutchSave",
     ...overrides,
   };
 }

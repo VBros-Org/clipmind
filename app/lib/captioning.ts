@@ -9,6 +9,12 @@ import { buildCaptionClipMessage } from "./prompts/caption-clip";
 
 const MAX_CAPTION_ATTEMPTS = 2;
 const FORBIDDEN_DASH_RE = /[\u2013\u2014]/;
+const PLATFORM_COMPARISON_HASHTAG_RE = /(^|\s)#[^\s#]+/g;
+const PLATFORM_COMPARISON_NOISE_RE = /[\s.,!?;:()[\]{}"'-]+/g;
+const NEAR_IDENTICAL_PLATFORM_SIMILARITY = 0.92;
+const MIN_NEAR_IDENTICAL_COMPARE_CHARS = 20;
+const MIN_CONTAINED_PLATFORM_COMPARE_CHARS = 40;
+const CONTAINED_PLATFORM_BODY_RATIO = 0.55;
 const POST_COPY_PLATFORMS = ["youtube", "tiktok", "instagram"] as const;
 
 export type CaptionPlatform = (typeof POST_COPY_PLATFORMS)[number];
@@ -206,7 +212,99 @@ export function findCaptionSanityError(
     }
   }
 
+  const platformSimilarityError = findPlatformSimilarityError(variants);
+  if (platformSimilarityError) {
+    return platformSimilarityError;
+  }
+
   return null;
+}
+
+function findPlatformSimilarityError(
+  variants: PostCopyVariants,
+): string | null {
+  const tiktok = normalizePlatformBodyForComparison(variants.tiktok);
+  const instagram = normalizePlatformBodyForComparison(variants.instagram);
+
+  if (!tiktok || !instagram) {
+    return null;
+  }
+
+  if (tiktok === instagram) {
+    return platformSimilarityCorrection();
+  }
+
+  if (isMostlyContainedPlatformBody(tiktok, instagram)) {
+    return platformSimilarityCorrection();
+  }
+
+  if (
+    Math.min(tiktok.length, instagram.length) >=
+      MIN_NEAR_IDENTICAL_COMPARE_CHARS &&
+    normalizedLevenshteinSimilarity(tiktok, instagram) >=
+      NEAR_IDENTICAL_PLATFORM_SIMILARITY
+  ) {
+    return platformSimilarityCorrection();
+  }
+
+  return null;
+}
+
+function platformSimilarityCorrection(): string {
+  return "tiktok and instagram are near-identical after removing hashtags and spacing, or one platform body mostly contains the other. TikTok must be a compact reactive caption with tags. Instagram must have a first-line hook, then a separate story or context line before tight tags. Return distinct clean JSON only.";
+}
+
+function normalizePlatformBodyForComparison(text: string): string {
+  return text
+    .replace(PLATFORM_COMPARISON_HASHTAG_RE, " ")
+    .replace(PLATFORM_COMPARISON_NOISE_RE, "")
+    .trim()
+    .toLowerCase();
+}
+
+function isMostlyContainedPlatformBody(left: string, right: string): boolean {
+  const shorter = left.length <= right.length ? left : right;
+  const longer = left.length <= right.length ? right : left;
+
+  return (
+    shorter.length >= MIN_CONTAINED_PLATFORM_COMPARE_CHARS &&
+    shorter.length / longer.length >= CONTAINED_PLATFORM_BODY_RATIO &&
+    longer.includes(shorter)
+  );
+}
+
+function normalizedLevenshteinSimilarity(left: string, right: string): number {
+  const distance = levenshteinDistance(left, right);
+  return 1 - distance / Math.max(left.length, right.length);
+}
+
+function levenshteinDistance(left: string, right: string): number {
+  if (left === right) {
+    return 0;
+  }
+
+  if (left.length < right.length) {
+    return levenshteinDistance(right, left);
+  }
+
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+
+  for (let leftIndex = 0; leftIndex < left.length; leftIndex += 1) {
+    const current = [leftIndex + 1];
+
+    for (let rightIndex = 0; rightIndex < right.length; rightIndex += 1) {
+      const substitutionCost = left[leftIndex] === right[rightIndex] ? 0 : 1;
+      current[rightIndex + 1] = Math.min(
+        current[rightIndex] + 1,
+        previous[rightIndex + 1] + 1,
+        previous[rightIndex] + substitutionCost,
+      );
+    }
+
+    previous = current;
+  }
+
+  return previous[right.length];
 }
 
 function buildCaptionAttemptMessage(
