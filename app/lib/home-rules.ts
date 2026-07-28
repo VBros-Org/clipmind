@@ -129,7 +129,7 @@ export function selectHomeNudges(input: HomeNudgeInput): HomeNudge[] {
       id: `post:${input.dueClip.clipId}`,
       kind: "post",
       title: `Clip scheduled for ${input.dueClip.timeLabel} is ready. Post it now.`,
-      href: `/review?clip=${encodeURIComponent(input.dueClip.clipId)}`,
+      href: `/home?post=${encodeURIComponent(input.dueClip.clipId)}`,
     });
   }
 

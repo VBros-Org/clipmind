@@ -303,6 +303,65 @@ export async function markPosted(
   });
 }
 
+export async function markPostedForCreator(
+  creatorId: string,
+  clipId: string,
+  now: Date = new Date(),
+  options: SchedulingRepositoryOptions = {},
+): Promise<MarkPostedResult | null> {
+  assertValidDate(now, "now");
+
+  const db = options.prismaClient ?? prisma;
+
+  return db.$transaction(async (tx) => {
+    const clip = await tx.clip.findFirst({
+      where: {
+        id: clipId,
+        creatorId,
+      },
+      select: {
+        id: true,
+        creatorId: true,
+        videoId: true,
+        status: true,
+        scheduledFor: true,
+      },
+    });
+
+    if (!clip) {
+      return null;
+    }
+
+    const fromStatus = toClipSchedulingStatus(clip.status);
+    assertClipStatusTransition(fromStatus, "posted");
+
+    const updateResult = await tx.clip.updateMany({
+      where: {
+        id: clip.id,
+        creatorId,
+        status: "scheduled",
+      },
+      data: {
+        status: "posted",
+        postedAt: now,
+      },
+    });
+
+    if (updateResult.count !== 1) {
+      throw new Error(`Clip ${clip.id} was not scheduled at update time.`);
+    }
+
+    return {
+      status: "posted",
+      clipId: clip.id,
+      creatorId: clip.creatorId,
+      videoId: clip.videoId,
+      scheduledFor: clip.scheduledFor,
+      postedAt: now,
+    };
+  });
+}
+
 function toSchedulingClip(clip: {
   id: string;
   videoId: string;

@@ -33,6 +33,8 @@ Top to bottom:
   with a line "set your rhythm to see runway" linking to Rhythm.
 - **Next up.** The next scheduled clip: thumbnail (frame from renderedUrl if present),
   scheduled time in the creator's local time, platform captions ready indicator.
+- **Ready to post.** A horizontal row of scheduled, unposted clips. Each box uses the
+  real clip thumbnail, shows the scheduled local time, and opens the Post sheet on tap.
 - **Nudge cards.** Vertical stack, max 3, dismissible, each one action:
   - "N clips waiting for review" -> Review tab
   - "Runway under N days. Upload something long." -> Upload tab
@@ -63,11 +65,27 @@ Keep the working flow, restyle to cards that lead with video:
 - Tap card -> full-screen review sheet: video player fills width (16:9 source preview
   seeked to the window, or the rendered 9:16 when it exists), transcript line, the
   Mind's reason in its own voice-y quote block, then two thumb-reach buttons:
-  Accept (accent, left... actually right for right thumbs) / Pass (ghost). Under them
+  Accept (accent, left... actually right for right thumbs) / Reject (ghost). Under them
   the caption panel: three platform rows, each one-tap copy with a copied tick.
 - Accepted clips show a rendering spinner chip until renderedUrl lands, then swap to
   the final. Rejected cards grey and collapse.
 - Empty state: "No clips waiting. Upload something long." -> Upload tab.
+
+## Post sheet
+
+Opened from Home ready-to-post boxes and post-time nudges.
+
+- **Video player.** Shows the rendered MP4 from the media CDN. Use a native `video`
+  element with controls. Do not block the context menu, so long-press save works on
+  mobile browsers.
+- **Save to device.** Primary utility action above the captions. Use the Web Share API
+  with `navigator.share({ files })` when supported by fetching the MP4 as a `File`.
+  If file sharing is unavailable, show a direct download link.
+- **Caption rows.** YouTube Shorts, TikTok, and Instagram rows show the platform copy
+  with one-tap copy and a copied tick.
+- **Mark as posted.** The primary action calls the backend transition
+  `scheduled -> posted`. After success, the box leaves Home, the posted stat increments,
+  and runway recomputes.
 
 ## Page 4: Rhythm
 

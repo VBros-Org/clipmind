@@ -14,6 +14,7 @@ import { requireStorageEnv, type StorageEnv } from "./env";
 
 const DEFAULT_SOURCE_PRESIGN_TTL_SECONDS = 60 * 60;
 const VIDEO_MP4_CONTENT_TYPE = "video/mp4";
+const JPEG_CONTENT_TYPE = "image/jpeg";
 
 export type StorageUploadBody = NonNullable<PutObjectCommandInput["Body"]>;
 export type SourceUploadInput = string | StorageUploadBody;
@@ -47,6 +48,7 @@ export interface R2Storage {
   ): Promise<string>;
   presignSourceUrl(key: string, ttlSeconds?: number): Promise<string>;
   uploadRender(clipId: string, stream: StorageUploadBody): Promise<string>;
+  uploadThumbnail(clipId: string, stream: StorageUploadBody): Promise<string>;
   probeBuckets(): Promise<StorageProbeResult[]>;
 }
 
@@ -100,6 +102,17 @@ export function createR2Storage(options: R2StorageOptions = {}): R2Storage {
       return publicUrlForKey(storageEnv.R2_MEDIA_PUBLIC_BASE, key);
     },
 
+    async uploadThumbnail(clipId, stream) {
+      const key = thumbnailKeyForClip(clipId);
+      await putObject(s3Client, {
+        Bucket: storageEnv.R2_MEDIA_BUCKET,
+        Key: key,
+        Body: stream,
+        ContentType: JPEG_CONTENT_TYPE,
+      });
+      return key;
+    },
+
     async probeBuckets() {
       const targets: StorageProbeTarget[] = [
         { bucket: storageEnv.R2_SOURCES_BUCKET, label: "sources" },
@@ -149,12 +162,37 @@ export function uploadRender(
   return createR2Storage(options).uploadRender(clipId, stream);
 }
 
+export function uploadThumbnail(
+  clipId: string,
+  stream: StorageUploadBody,
+  options?: R2StorageOptions,
+): Promise<string> {
+  return createR2Storage(options).uploadThumbnail(clipId, stream);
+}
+
 export function sourceKeyForVideo(videoId: string): string {
   return `videos/${videoId}/source.mp4`;
 }
 
 export function renderKeyForClip(clipId: string): string {
   return `clips/${clipId}.mp4`;
+}
+
+export function thumbnailKeyForClip(clipId: string): string {
+  return `thumbs/${clipId}.jpg`;
+}
+
+export function publicMediaUrlForKey(
+  key: string | null | undefined,
+  baseUrl = process.env.R2_MEDIA_PUBLIC_BASE,
+): string | null {
+  const cleanKey = key?.trim().replace(/^\/+/, "");
+  const cleanBase = baseUrl?.trim();
+  if (!cleanKey || !cleanBase) {
+    return null;
+  }
+
+  return publicUrlForKey(cleanBase, cleanKey);
 }
 
 function createR2Client(storageEnv: StorageEnv): S3Client {

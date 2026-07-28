@@ -6,6 +6,7 @@ import { cookieHeaderForAccessCode } from "../lib/review-auth";
 import {
   handleAcceptClip,
   handleGetClip,
+  handleMarkClipPosted,
   handleRejectClip,
 } from "../lib/review-api";
 
@@ -172,6 +173,81 @@ test("reject transitions candidate to rejected and does not render", async () =>
       },
     });
     assert.equal(clip.status, "rejected");
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("posted API only transitions scheduled clips for the owning creator", async () => {
+  const fixture = await createFixture();
+
+  try {
+    const candidateResponse = await handleMarkClipPosted(
+      requestWithCode(fixture.clipId, fixture.creatorACode, "POST"),
+      { id: fixture.clipId },
+      {
+        now: new Date("2026-07-28T12:00:00.000Z"),
+      },
+    );
+    assert.equal(candidateResponse.status, 409);
+
+    await prisma.clip.update({
+      where: {
+        id: fixture.clipId,
+      },
+      data: {
+        status: "scheduled",
+        scheduledFor: new Date("2026-07-28T11:00:00.000Z"),
+      },
+    });
+
+    const crossCreator = await handleMarkClipPosted(
+      requestWithCode(fixture.clipId, fixture.creatorBCode, "POST"),
+      { id: fixture.clipId },
+      {
+        now: new Date("2026-07-28T12:00:00.000Z"),
+      },
+    );
+    assert.equal(crossCreator.status, 404);
+
+    const response = await handleMarkClipPosted(
+      requestWithCode(fixture.clipId, fixture.creatorACode, "POST"),
+      { id: fixture.clipId },
+      {
+        now: new Date("2026-07-28T12:00:00.000Z"),
+      },
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      status: "posted",
+      clipId: fixture.clipId,
+      creatorId: fixture.creatorAId,
+      videoId: (await prisma.clip.findUniqueOrThrow({
+        where: {
+          id: fixture.clipId,
+        },
+        select: {
+          videoId: true,
+        },
+      })).videoId,
+      scheduledFor: "2026-07-28T11:00:00.000Z",
+      postedAt: "2026-07-28T12:00:00.000Z",
+    });
+
+    const postedClip = await prisma.clip.findUniqueOrThrow({
+      where: {
+        id: fixture.clipId,
+      },
+      select: {
+        status: true,
+        postedAt: true,
+      },
+    });
+    assert.equal(postedClip.status, "posted");
+    assert.equal(
+      postedClip.postedAt?.toISOString(),
+      "2026-07-28T12:00:00.000Z",
+    );
   } finally {
     await cleanupFixture(fixture);
   }

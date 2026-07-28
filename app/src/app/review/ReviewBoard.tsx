@@ -23,6 +23,7 @@ export type ReviewClipView = {
   startMs: number;
   endMs: number;
   renderedUrl: string | null;
+  thumbUrl: string | null;
   postCopyVariants: PostCopyVariants | null;
   transcript: string | null;
   mindRank: number | null;
@@ -171,13 +172,12 @@ function ClipCard({
       type="button"
     >
       <span className={styles.thumb}>
-        {clip.renderedUrl ? (
-          <video
-            className={styles.thumbVideo}
-            muted
-            playsInline
-            preload="metadata"
-            src={clip.renderedUrl}
+        {clip.thumbUrl ? (
+          <img
+            alt=""
+            className={styles.thumbImage}
+            data-testid="review-thumb"
+            src={clip.thumbUrl}
           />
         ) : (
           <span className={styles.poster} aria-hidden="true" />
@@ -314,7 +314,7 @@ function ReviewSheet({
     }
   }
 
-  async function passClip() {
+  async function rejectClip() {
     setIsBusy(true);
     try {
       const response = await fetch(`/api/clips/${clip.id}/reject`, {
@@ -448,12 +448,12 @@ function ReviewSheet({
 
       <div className={styles.sheetActions}>
         <button
-          className={`${styles.actionButton} ${styles.passButton}`}
+          className={`${styles.actionButton} ${styles.rejectButton}`}
           disabled={!canReview || isBusy}
-          onClick={passClip}
+          onClick={rejectClip}
           type="button"
         >
-          Pass
+          Reject
         </button>
         <button
           className={`${styles.actionButton} ${styles.acceptButton}`}
@@ -536,7 +536,7 @@ function statusLabel(status: ClipStatus, isRendering: boolean): string {
   }
 
   if (status === "rejected") {
-    return "passed";
+    return "rejected";
   }
 
   return status;

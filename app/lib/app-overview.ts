@@ -8,7 +8,9 @@ import {
   type RunwayState,
 } from "./home-rules";
 import { scheduleSettingsFromRow, type ScheduleSettings } from "./schedule-settings";
+import { publicMediaUrlForKey } from "./storage";
 import { formatVideoLabel } from "./video-label";
+import type { PostCopyVariants } from "./captioning";
 
 export type { HomeNudge, RunwayState } from "./home-rules";
 
@@ -20,6 +22,7 @@ export type HomeOverview = {
   runway: RunwayState;
   reviewCount: number;
   nextUp: NextScheduledClip | null;
+  readyToPost: ReadyToPostClip[];
   nudges: HomeNudge[];
   stats: {
     totalPosted: number;
@@ -31,8 +34,19 @@ export type NextScheduledClip = {
   id: string;
   videoId: string;
   renderedUrl: string | null;
+  thumbUrl: string | null;
   scheduledForIso: string;
   hasCaptions: boolean;
+  label: string;
+};
+
+export type ReadyToPostClip = {
+  id: string;
+  videoId: string;
+  renderedUrl: string | null;
+  thumbUrl: string | null;
+  scheduledForIso: string;
+  postCopyVariants: PostCopyVariants | null;
   label: string;
 };
 
@@ -91,6 +105,7 @@ export async function loadHomeOverview(
     totalPosted,
     totalClipsMade,
     nextScheduledClip,
+    readyToPostClips,
   ] = await Promise.all([
     db.schedule.findUnique({
       where: {
@@ -152,6 +167,39 @@ export async function loadHomeOverview(
         id: true,
         videoId: true,
         renderedUrl: true,
+        thumbKey: true,
+        postCopyVariants: true,
+        scheduledFor: true,
+        video: {
+          select: {
+            createdAt: true,
+          },
+        },
+      },
+    }),
+    db.clip.findMany({
+      where: {
+        creatorId,
+        status: "scheduled",
+        postedAt: null,
+        scheduledFor: {
+          not: null,
+        },
+      },
+      orderBy: [
+        {
+          scheduledFor: "asc",
+        },
+        {
+          id: "asc",
+        },
+      ],
+      take: 10,
+      select: {
+        id: true,
+        videoId: true,
+        renderedUrl: true,
+        thumbKey: true,
         postCopyVariants: true,
         scheduledFor: true,
         video: {
@@ -168,14 +216,24 @@ export async function loadHomeOverview(
   const nextUp = nextScheduledClip?.scheduledFor
     ? toNextScheduledClip(nextScheduledClip)
     : null;
+  const readyToPost = readyToPostClips
+    .filter((clip) => clip.scheduledFor)
+    .map(toReadyToPostClip);
+  const dueReadyClip = readyToPost.find((clip) => {
+    const scheduledFor = new Date(clip.scheduledForIso);
+    return (
+      !Number.isNaN(scheduledFor.getTime()) &&
+      scheduledFor.getTime() <= now.getTime()
+    );
+  });
   const nudges = selectHomeNudges({
     reviewCount,
     runway,
     dueClip:
-      nextScheduledClip?.scheduledFor && nextScheduledClip.scheduledFor <= now
+      dueReadyClip
         ? {
-            clipId: nextScheduledClip.id,
-            timeLabel: formatHourMinute(nextScheduledClip.scheduledFor),
+            clipId: dueReadyClip.id,
+            timeLabel: formatHourMinute(new Date(dueReadyClip.scheduledForIso)),
             isDue: true,
           }
         : null,
@@ -189,6 +247,7 @@ export async function loadHomeOverview(
     runway,
     reviewCount,
     nextUp,
+    readyToPost,
     nudges,
     stats: {
       totalPosted,
@@ -278,6 +337,7 @@ function toNextScheduledClip(clip: {
   id: string;
   videoId: string;
   renderedUrl: string | null;
+  thumbKey: string | null;
   postCopyVariants: Prisma.JsonValue;
   scheduledFor: Date | null;
   video: {
@@ -288,22 +348,60 @@ function toNextScheduledClip(clip: {
     id: clip.id,
     videoId: clip.videoId,
     renderedUrl: clip.renderedUrl,
+    thumbUrl: publicMediaUrlForKey(clip.thumbKey),
     scheduledForIso: clip.scheduledFor?.toISOString() ?? "",
     hasCaptions: hasPostCopyVariants(clip.postCopyVariants),
     label: formatVideoLabel(clip.video.createdAt),
   };
 }
 
+function toReadyToPostClip(clip: {
+  id: string;
+  videoId: string;
+  renderedUrl: string | null;
+  thumbKey: string | null;
+  postCopyVariants: Prisma.JsonValue;
+  scheduledFor: Date | null;
+  video: {
+    createdAt: Date;
+  };
+}): ReadyToPostClip {
+  return {
+    id: clip.id,
+    videoId: clip.videoId,
+    renderedUrl: clip.renderedUrl,
+    thumbUrl: publicMediaUrlForKey(clip.thumbKey),
+    scheduledForIso: clip.scheduledFor?.toISOString() ?? "",
+    postCopyVariants: toPostCopyVariants(clip.postCopyVariants),
+    label: formatVideoLabel(clip.video.createdAt),
+  };
+}
+
 function hasPostCopyVariants(value: Prisma.JsonValue): boolean {
+  return toPostCopyVariants(value) !== null;
+}
+
+function toPostCopyVariants(value: Prisma.JsonValue): PostCopyVariants | null {
   if (!isRecord(value)) {
-    return false;
+    return null;
   }
 
-  return (
-    typeof value.youtube === "string" &&
-    typeof value.tiktok === "string" &&
-    typeof value.instagram === "string"
-  );
+  const youtube = value.youtube;
+  const tiktok = value.tiktok;
+  const instagram = value.instagram;
+  if (
+    typeof youtube !== "string" ||
+    typeof tiktok !== "string" ||
+    typeof instagram !== "string"
+  ) {
+    return null;
+  }
+
+  return {
+    youtube,
+    tiktok,
+    instagram,
+  };
 }
 
 function captionPresetFromStyle(value: Prisma.JsonValue): string {

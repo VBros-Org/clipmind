@@ -7,8 +7,10 @@ import { onboardCreator, type OnboardingRepository } from "../lib/onboarding";
 import { computeNextSlot } from "../lib/scheduling";
 import {
   createR2Storage,
+  publicMediaUrlForKey,
   renderKeyForClip,
   sourceKeyForVideo,
+  thumbnailKeyForClip,
   type S3ClientLike,
 } from "../lib/storage";
 import type { InitialTenets } from "../lib/tenets";
@@ -61,6 +63,10 @@ test("storage uses stable source and render key layout", async () => {
     "clip_456",
     Readable.from(Buffer.from("rendered")),
   );
+  const thumbKey = await storage.uploadThumbnail(
+    "clip_789",
+    Readable.from(Buffer.from("jpeg")),
+  );
 
   assert.equal(sourceKey, sourceKeyForVideo("video_123"));
   assert.equal(sourceKey, "videos/video_123/source.mp4");
@@ -73,13 +79,22 @@ test("storage uses stable source and render key layout", async () => {
   });
   assert.equal(renderKeyForClip("clip_456"), "clips/clip_456.mp4");
   assert.equal(renderedUrl, "https://cdn.example/clips/clip_456.mp4");
-  assert.equal(sentCommands.length, 2);
+  assert.equal(thumbnailKeyForClip("clip_789"), "thumbs/clip_789.jpg");
+  assert.equal(thumbKey, "thumbs/clip_789.jpg");
+  assert.equal(
+    publicMediaUrlForKey(thumbKey, "https://cdn.example/"),
+    "https://cdn.example/thumbs/clip_789.jpg",
+  );
+  assert.equal(sentCommands.length, 3);
   assert.equal(sentCommands[0]?.input.Bucket, "clipmind-sources");
   assert.equal(sentCommands[0]?.input.Key, "videos/video_123/source.mp4");
   assert.equal(sentCommands[0]?.input.ContentType, "video/mp4");
   assert.equal(sentCommands[1]?.input.Bucket, "clipmind-media");
   assert.equal(sentCommands[1]?.input.Key, "clips/clip_456.mp4");
   assert.equal(sentCommands[1]?.input.ContentType, "video/mp4");
+  assert.equal(sentCommands[2]?.input.Bucket, "clipmind-media");
+  assert.equal(sentCommands[2]?.input.Key, "thumbs/clip_789.jpg");
+  assert.equal(sentCommands[2]?.input.ContentType, "image/jpeg");
 });
 
 test("storage env validation is lazy and scoped to R2 variables", () => {

@@ -108,7 +108,8 @@
   background: var(--cm-surface);
 }
 
-.thumbVideo {
+.thumbVideo,
+.thumbImage {
   display: block;
   width: 100%;
   height: 100%;
@@ -389,7 +390,7 @@
   opacity: 0.56;
 }
 
-.passButton {
+.rejectButton {
   border: var(--cm-border-width) solid var(--cm-border-strong);
   background: transparent;
   color: var(--cm-text);

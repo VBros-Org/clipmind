@@ -17,6 +17,11 @@ import {
   type RankCandidatesResult,
 } from "./ranking";
 import { runSchedulePass } from "./scheduling-repository";
+import {
+  generateClipThumbnail,
+  type GenerateClipThumbnailOptions,
+  type GenerateClipThumbnailResult,
+} from "./thumbnails";
 
 export const PIPELINE_STAGES = [
   "uploaded",
@@ -74,6 +79,11 @@ type CaptionClipImpl = (
   options?: CaptionClipOptions,
 ) => Promise<CaptionClipResult>;
 
+type GenerateClipThumbnailImpl = (
+  clipId: string,
+  options?: GenerateClipThumbnailOptions,
+) => Promise<GenerateClipThumbnailResult>;
+
 export type PipelineOptions = {
   prismaClient?: PrismaClient;
   ingestUploadedVideoImpl?: IngestUploadedVideoImpl;
@@ -82,6 +92,9 @@ export type PipelineOptions = {
   rankOptions?: Omit<RankCandidatesOptions, "prismaClient">;
   captionClipImpl?: CaptionClipImpl;
   captionOptions?: Omit<CaptionClipOptions, "prismaClient">;
+  generateClipThumbnailImpl?: GenerateClipThumbnailImpl;
+  thumbnailOptions?: Omit<GenerateClipThumbnailOptions, "prismaClient">;
+  thumbnailLogger?: Pick<Console, "warn">;
   onStageChange?: (stage: PipelineStage) => void | Promise<void>;
 };
 
@@ -133,6 +146,7 @@ export async function runPipeline(
   const ingestImpl = options.ingestUploadedVideoImpl ?? ingestUploadedVideo;
   const rankImpl = options.rankCandidatesImpl ?? rankCandidates;
   const captionImpl = options.captionClipImpl ?? captionClip;
+  const thumbnailImpl = options.generateClipThumbnailImpl ?? generateClipThumbnail;
   const captionedClipIds: string[] = [];
 
   try {
@@ -149,6 +163,13 @@ export async function runPipeline(
       activeStage = "candidates";
       await setPipelineStage(db, video.id, activeStage, options);
       await assertCandidateClips(db, video.id, video.creatorId);
+      await generateCandidateThumbnails(
+        db,
+        video.id,
+        video.creatorId,
+        thumbnailImpl,
+        options,
+      );
     }
 
     if (shouldRun(activeStage, "ranking")) {
@@ -298,6 +319,46 @@ async function assertCandidateClips(
 
   if (count === 0) {
     throw new Error("No clip candidates returned.");
+  }
+}
+
+async function generateCandidateThumbnails(
+  db: PrismaClient,
+  videoId: string,
+  creatorId: string,
+  thumbnailImpl: GenerateClipThumbnailImpl,
+  options: PipelineOptions,
+): Promise<void> {
+  const clips = await db.clip.findMany({
+    where: {
+      videoId,
+      creatorId,
+      status: "candidate",
+    },
+    orderBy: [
+      {
+        startMs: "asc",
+      },
+      {
+        id: "asc",
+      },
+    ],
+    select: {
+      id: true,
+    },
+  });
+
+  for (const clip of clips) {
+    try {
+      await thumbnailImpl(clip.id, {
+        ...options.thumbnailOptions,
+        prismaClient: db,
+      });
+    } catch (error) {
+      (options.thumbnailLogger ?? console).warn(
+        `Thumbnail generation failed for clip ${clip.id}: ${shortErrorMessage(error)}`,
+      );
+    }
   }
 }
 

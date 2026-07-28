@@ -31,6 +31,8 @@
     "schedule:tick": "tsc -p tsconfig.scripts.json && node --env-file=.env dist/scripts/schedule-tick.js",
     "premark:posted": "prisma generate",
     "mark:posted": "tsc -p tsconfig.scripts.json && node --env-file=.env dist/scripts/mark-posted.js",
+    "prebackfill:thumbs": "prisma generate",
+    "backfill:thumbs": "tsc -p tsconfig.scripts.json && node --env-file=.env dist/scripts/backfill-thumbs.js",
     "preset:access-code": "prisma generate",
     "set:access-code": "tsc -p tsconfig.scripts.json && node --env-file=.env dist/scripts/set-access-code.js",
     "pretest:ranking": "prisma generate",
