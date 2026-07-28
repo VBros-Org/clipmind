@@ -6,6 +6,7 @@ import path from "node:path";
 import type { ClipServiceClient } from "../lib/ingest";
 import { ingestVideo } from "../lib/ingest";
 import { prisma } from "../lib/db";
+import type { R2Storage } from "../lib/storage";
 
 async function main() {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clipmind-ingest-test-"));
@@ -14,6 +15,8 @@ async function main() {
 
   let creatorId: string | null = null;
   let clipServiceCallCount = 0;
+  let sourceUploadCount = 0;
+  let sourcePresignCount = 0;
 
   try {
     await writeFile(videoPath, Buffer.from(`fake-video-${marker}`));
@@ -34,19 +37,31 @@ async function main() {
       async fetchCandidates(source) {
         clipServiceCallCount += 1;
 
-        assert.equal(source.kind, "file");
-        assert.equal(source.path, resolvedVideoPath);
+        assert.equal(source.kind, "url");
 
         const pendingVideo = await prisma.video.findFirst({
           where: {
             creatorId: creator.id,
           },
           select: {
+            sourceKey: true,
             status: true,
           },
         });
 
         assert.equal(pendingVideo?.status, "uploaded");
+        assert.equal(
+          source.sourceUrl,
+          `https://signed.example/${pendingVideo?.sourceKey}`,
+        );
+        assert.equal(
+          pendingVideo?.sourceKey?.startsWith("videos/"),
+          true,
+        );
+        assert.equal(
+          pendingVideo?.sourceKey?.endsWith("/source.mp4"),
+          true,
+        );
 
         return {
           candidates: [
@@ -69,9 +84,21 @@ async function main() {
         };
       },
     };
+    const storage = {
+      async uploadSource(videoId, source) {
+        sourceUploadCount += 1;
+        assert.equal(source, resolvedVideoPath);
+        return `videos/${videoId}/source.mp4`;
+      },
+      async presignSourceUrl(key) {
+        sourcePresignCount += 1;
+        return `https://signed.example/${key}`;
+      },
+    } satisfies Pick<R2Storage, "uploadSource" | "presignSourceUrl">;
 
     const firstResult = await ingestVideo(creator.id, videoPath, {
       clipServiceClient,
+      storage,
     });
 
     assert.equal(firstResult.status, "clipped");
@@ -95,6 +122,7 @@ async function main() {
 
     assert.equal(video.status, "clipped");
     assert.equal(video.sourceUrl, null);
+    assert.equal(video.sourceKey, `videos/${video.id}/source.mp4`);
     assert.equal(video.contentKey?.startsWith("sha256:"), true);
     assert.equal(video.clips.length, 2);
     assert.equal(video.clips[0].startMs, 1_000);
@@ -112,6 +140,7 @@ async function main() {
 
     const secondResult = await ingestVideo(creator.id, videoPath, {
       clipServiceClient,
+      storage,
     });
 
     assert.equal(secondResult.videoId, firstResult.videoId);
@@ -121,6 +150,8 @@ async function main() {
     assert.equal(secondResult.clipCount, 2);
     assert.equal(secondResult.skippedExisting, true);
     assert.equal(clipServiceCallCount, 1);
+    assert.equal(sourceUploadCount, 1);
+    assert.equal(sourcePresignCount, 1);
 
     const videoCount = await prisma.video.count({
       where: {

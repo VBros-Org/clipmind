@@ -1,13 +1,19 @@
 import { createHash } from "node:crypto";
-import { createReadStream, openAsBlob } from "node:fs";
+import { createReadStream } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import type { Prisma, PrismaClient } from "@prisma/client";
 
 import { prisma } from "./db";
 import { env } from "./env";
+import {
+  createR2Storage,
+  type R2Storage,
+  type StorageUploadBody,
+} from "./storage";
 
 type VideoStatus = "uploaded" | "transcribed" | "clipped";
 
@@ -24,15 +30,10 @@ type ResolvedSource =
       sourceUrl: string;
     };
 
-type ClipServiceSource =
-  | {
-      kind: "file";
-      path: string;
-    }
-  | {
-      kind: "url";
-      sourceUrl: string;
-    };
+type ClipServiceSource = {
+  kind: "url";
+  sourceUrl: string;
+};
 
 export type ClipServiceCandidate = {
   startMs: number;
@@ -52,6 +53,7 @@ export interface ClipServiceClient {
 type IngestVideoOptions = {
   clipServiceClient?: ClipServiceClient;
   prismaClient?: PrismaClient;
+  storage?: Pick<R2Storage, "uploadSource" | "presignSourceUrl">;
 };
 
 export type IngestVideoResult = {
@@ -67,10 +69,7 @@ export type IngestVideoResult = {
 const defaultClipServiceClient: ClipServiceClient = {
   async fetchCandidates(source: ClipServiceSource): Promise<ClipServiceCandidateResponse> {
     const endpoint = clipServiceEndpoint();
-    const response =
-      source.kind === "file"
-        ? await fetchMultipartCandidates(endpoint, source.path)
-        : await fetchUrlCandidates(endpoint, source.sourceUrl);
+    const response = await fetchUrlCandidates(endpoint, source.sourceUrl);
 
     if (!response.ok) {
       const detail = await response.text();
@@ -113,6 +112,7 @@ export async function ingestVideo(
     },
     select: {
       id: true,
+      sourceKey: true,
       status: true,
     },
   });
@@ -146,6 +146,7 @@ export async function ingestVideo(
       },
       select: {
         id: true,
+        sourceKey: true,
         status: true,
       },
     }));
@@ -169,9 +170,26 @@ export async function ingestVideo(
     });
   }
 
-  const candidateResponse = await clipServiceClient.fetchCandidates(
-    toClipServiceSource(resolvedSource),
-  );
+  const storage = options.storage ?? createR2Storage();
+  const sourceKey =
+    video.sourceKey ?? (await uploadSourceVideo(storage, video.id, resolvedSource));
+
+  if (sourceKey !== video.sourceKey) {
+    await db.video.update({
+      where: {
+        id: video.id,
+      },
+      data: {
+        sourceKey,
+      },
+    });
+  }
+
+  const candidateSourceUrl = await storage.presignSourceUrl(sourceKey);
+  const candidateResponse = await clipServiceClient.fetchCandidates({
+    kind: "url",
+    sourceUrl: candidateSourceUrl,
+  });
 
   await db.video.update({
     where: {
@@ -231,20 +249,6 @@ export async function ingestVideo(
   };
 }
 
-async function fetchMultipartCandidates(endpoint: URL, filePath: string): Promise<Response> {
-  const body = new FormData();
-  const blob = await openAsBlob(filePath);
-  body.append("file", blob, path.basename(filePath));
-
-  return fetch(endpoint, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${env.CLIP_SERVICE_TOKEN}`,
-    },
-    body,
-  });
-}
-
 function fetchUrlCandidates(endpoint: URL, sourceUrl: string): Promise<Response> {
   return fetch(endpoint, {
     method: "POST",
@@ -256,6 +260,36 @@ function fetchUrlCandidates(endpoint: URL, sourceUrl: string): Promise<Response>
       source_url: sourceUrl,
     }),
   });
+}
+
+async function uploadSourceVideo(
+  storage: Pick<R2Storage, "uploadSource">,
+  videoId: string,
+  source: ResolvedSource,
+): Promise<string> {
+  if (source.kind === "file") {
+    return storage.uploadSource(videoId, source.path);
+  }
+
+  const sourceStream = await fetchHttpSourceStream(source.sourceUrl);
+  return storage.uploadSource(videoId, sourceStream);
+}
+
+async function fetchHttpSourceStream(sourceUrl: string): Promise<StorageUploadBody> {
+  const response = await fetch(sourceUrl);
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(
+      `Could not fetch source URL for R2 upload, status ${response.status}: ${detail.slice(0, 500)}`,
+    );
+  }
+  if (!response.body) {
+    throw new Error("Could not fetch source URL for R2 upload, empty body.");
+  }
+
+  return Readable.fromWeb(
+    response.body as Parameters<typeof Readable.fromWeb>[0],
+  ) as StorageUploadBody;
 }
 
 function clipServiceEndpoint(): URL {
@@ -372,20 +406,6 @@ function normalizeHttpUrl(url: URL): string {
   url.hostname = url.hostname.toLowerCase();
   url.searchParams.sort();
   return url.toString();
-}
-
-function toClipServiceSource(source: ResolvedSource): ClipServiceSource {
-  if (source.kind === "file") {
-    return {
-      kind: "file",
-      path: source.path,
-    };
-  }
-
-  return {
-    kind: "url",
-    sourceUrl: source.sourceUrl,
-  };
 }
 
 async function sha256File(filePath: string): Promise<string> {

@@ -15,6 +15,7 @@ async function main() {
       id: result.videoId,
     },
     select: {
+      sourceKey: true,
       status: true,
       clips: {
         select: {
@@ -34,6 +35,7 @@ async function main() {
       "PASSED ingest video",
       `videoId=${result.videoId}`,
       `status=${video.status}`,
+      `sourceKey=${video.sourceKey ?? "null"}`,
       `clipCount=${video.clips.length}`,
       `createdVideo=${result.createdVideo}`,
       `createdClipCount=${result.createdClipCount}`,

@@ -27,6 +27,7 @@ model Video {
   creatorId  String
   creator    Creator  @relation(fields: [creatorId], references: [id])
   sourceUrl  String?
+  sourceKey  String?
   contentKey String?  @unique
   status     String   @default("uploaded") // uploaded | transcribed | clipped
   createdAt  DateTime @default(now())
