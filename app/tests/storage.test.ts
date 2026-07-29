@@ -7,6 +7,9 @@ import { onboardCreator, type OnboardingRepository } from "../lib/onboarding";
 import { computeNextSlot } from "../lib/scheduling";
 import {
   createR2Storage,
+  deleteMediaObject,
+  deleteSourceObject,
+  publicMediaKeyFromUrl,
   publicMediaUrlForKey,
   renderKeyForClip,
   sourceKeyForVideo,
@@ -85,6 +88,20 @@ test("storage uses stable source and render key layout", async () => {
     publicMediaUrlForKey(thumbKey, "https://cdn.example/"),
     "https://cdn.example/thumbs/clip_789.jpg",
   );
+  assert.equal(
+    publicMediaKeyFromUrl(
+      "https://cdn.example/clips/clip_456.mp4?cache=1",
+      "https://cdn.example/",
+    ),
+    "clips/clip_456.mp4",
+  );
+  assert.equal(
+    publicMediaKeyFromUrl(
+      "https://elsewhere.example/clips/clip_456.mp4",
+      "https://cdn.example",
+    ),
+    null,
+  );
   assert.equal(sentCommands.length, 3);
   assert.equal(sentCommands[0]?.input.Bucket, "clipmind-sources");
   assert.equal(sentCommands[0]?.input.Key, "videos/video_123/source.mp4");
@@ -95,6 +112,64 @@ test("storage uses stable source and render key layout", async () => {
   assert.equal(sentCommands[2]?.input.Bucket, "clipmind-media");
   assert.equal(sentCommands[2]?.input.Key, "thumbs/clip_789.jpg");
   assert.equal(sentCommands[2]?.input.ContentType, "image/jpeg");
+});
+
+test("storage deletes source and media objects through the configured buckets", async () => {
+  const sentCommands: RecordedCommand[] = [];
+  const s3Client = {
+    async send(command) {
+      sentCommands.push(recordCommand(command));
+      return {};
+    },
+  } satisfies S3ClientLike;
+
+  await deleteSourceObject("videos/video_123/source.mp4", {
+    env: storageEnv,
+    s3Client,
+  });
+  await deleteMediaObject("clips/clip_456.mp4", {
+    env: storageEnv,
+    s3Client,
+  });
+
+  assert.deepEqual(
+    sentCommands.map((command) => command.input),
+    [
+      {
+        Bucket: "clipmind-sources",
+        Key: "videos/video_123/source.mp4",
+      },
+      {
+        Bucket: "clipmind-media",
+        Key: "clips/clip_456.mp4",
+      },
+    ],
+  );
+});
+
+test("storage delete tolerates missing objects", async () => {
+  const s3Client = {
+    async send() {
+      const error = new Error("Object is already gone.") as Error & {
+        name: string;
+        $metadata: {
+          httpStatusCode: number;
+        };
+      };
+      error.name = "NoSuchKey";
+      error.$metadata = {
+        httpStatusCode: 404,
+      };
+      throw error;
+    },
+  } satisfies S3ClientLike;
+
+  await assert.doesNotReject(
+    deleteMediaObject("clips/missing.mp4", {
+      env: storageEnv,
+      s3Client,
+    }),
+  );
 });
 
 test("storage env validation is lazy and scoped to R2 variables", () => {

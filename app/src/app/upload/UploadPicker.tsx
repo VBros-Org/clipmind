@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { ChangeEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { deleteVideo } from "../../../lib/video-delete-client";
 import {
   fetchRecentUploads,
   fetchVideoStatus,
@@ -23,6 +25,10 @@ import {
   uploadTransferSucceeded,
   type UploadTransferState,
 } from "../../../lib/upload-transfer-state";
+import {
+  VideoDeleteSheet,
+  type VideoDeleteTarget,
+} from "../VideoDeleteSheet";
 import styles from "./upload.module.css";
 
 type UploadProgress = {
@@ -111,6 +117,7 @@ export function UploadPicker({
   includeMindSteps?: boolean;
   explainer?: string;
 }) {
+  const router = useRouter();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const wakeLockRef = useRef<ScreenWakeLockManager | null>(null);
   const [uploads, setUploads] = useState(initialUploads);
@@ -122,6 +129,9 @@ export function UploadPicker({
     () => uploadTransferIdle(),
   );
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<VideoDeleteTarget | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const activeUpload = useMemo(
     () =>
@@ -322,6 +332,47 @@ export function UploadPicker({
     setActiveVideoId(videoId);
   }
 
+  function openDeleteSheet(upload: UploadView) {
+    setDeleteTarget({
+      id: upload.id,
+      title: upload.label,
+      clipCount: upload.clipCount,
+    });
+    setDeleteError(null);
+  }
+
+  async function confirmDeleteVideo() {
+    if (!deleteTarget) {
+      return;
+    }
+
+    const target = deleteTarget;
+    setIsDeleting(true);
+    setDeleteError(null);
+
+    try {
+      const result = await deleteVideo(target.id);
+      if (result.outcome !== "deleted") {
+        setDeleteError(result.message);
+        return;
+      }
+
+      const freshUploads = await fetchRecentUploads();
+      if (freshUploads) {
+        applyFreshUploads(freshUploads);
+      } else {
+        setUploads((current) =>
+          current.filter((upload) => upload.id !== target.id),
+        );
+        setActiveVideoId((current) => (current === target.id ? null : current));
+      }
+      setDeleteTarget(null);
+      router.refresh();
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
   return (
     <>
       <button
@@ -429,8 +480,26 @@ export function UploadPicker({
         <h2 className={styles.sectionTitle} id="recent-uploads-title">
           Recent uploads
         </h2>
-        <RecentUploads uploads={uploads} retryUpload={retryUpload} />
+        <RecentUploads
+          openDeleteSheet={openDeleteSheet}
+          retryUpload={retryUpload}
+          uploads={uploads}
+        />
       </section>
+
+      {deleteTarget ? (
+        <VideoDeleteSheet
+          error={deleteError}
+          isDeleting={isDeleting}
+          onCancel={() => {
+            if (!isDeleting) {
+              setDeleteTarget(null);
+            }
+          }}
+          onConfirm={confirmDeleteVideo}
+          target={deleteTarget}
+        />
+      ) : null}
     </>
   );
 }
@@ -463,9 +532,11 @@ function ChecklistStep({
 }
 
 function RecentUploads({
+  openDeleteSheet,
   uploads,
   retryUpload,
 }: {
+  openDeleteSheet: (upload: UploadView) => void;
   uploads: UploadView[];
   retryUpload: (videoId: string) => void;
 }) {
@@ -501,6 +572,15 @@ function RecentUploads({
                 Retry
               </button>
             ) : null}
+            <button
+              aria-label={`Remove ${upload.label}`}
+              className={styles.removeButton}
+              data-testid="remove-upload-button"
+              onClick={() => openDeleteSheet(upload)}
+              type="button"
+            >
+              Remove
+            </button>
           </div>
         </article>
       ))}

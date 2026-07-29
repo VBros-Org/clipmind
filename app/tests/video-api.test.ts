@@ -5,12 +5,19 @@ import { Buffer } from "node:buffer";
 import { prisma } from "../lib/db";
 import { cookieHeaderForAccessCode } from "../lib/review-auth";
 import {
+  handleDeleteVideo,
   handleGetRecentUploads,
   handleGetVideoStatus,
   handleRetryVideo,
   handleUploadVideo,
 } from "../lib/video-api";
-import type { R2Storage, StorageUploadBody } from "../lib/storage";
+import { loadHomeOverview } from "../lib/app-overview";
+import {
+  createR2Storage,
+  type R2Storage,
+  type S3ClientLike,
+  type StorageUploadBody,
+} from "../lib/storage";
 
 type VideoApiFixture = {
   creatorAId: string;
@@ -18,6 +25,22 @@ type VideoApiFixture = {
   creatorACode: string;
   creatorBCode: string;
   videoId?: string;
+};
+
+const storageEnv = {
+  R2_ACCOUNT_ID: "account-id",
+  R2_ACCESS_KEY_ID: "access-key",
+  R2_SECRET_ACCESS_KEY: "secret-key",
+  R2_SOURCES_BUCKET: "clipmind-sources",
+  R2_MEDIA_BUCKET: "clipmind-media",
+  R2_MEDIA_PUBLIC_BASE: "https://cdn.example",
+};
+
+type RecordedCommand = {
+  input: {
+    Bucket?: unknown;
+    Key?: unknown;
+  };
 };
 
 test("upload route rejects missing auth before reading the multipart body", async () => {
@@ -198,6 +221,373 @@ test("recent uploads endpoint is creator scoped and no-store", async () => {
   }
 });
 
+test("delete video returns posted guard and does not delete storage or rows", async () => {
+  const fixture = await createFixture();
+  let storageCalls = 0;
+
+  try {
+    const video = await prisma.video.create({
+      data: {
+        creatorId: fixture.creatorAId,
+        contentKey: `posted-guard-${Date.now()}`,
+        sourceKey: "videos/posted-guard/source.mp4",
+        status: "clipped",
+        pipelineStage: "done",
+      },
+      select: {
+        id: true,
+      },
+    });
+    fixture.videoId = video.id;
+    await prisma.clip.create({
+      data: {
+        creatorId: fixture.creatorAId,
+        videoId: video.id,
+        startMs: 0,
+        endMs: 10_000,
+        status: "posted",
+        postedAt: new Date("2026-07-29T10:00:00.000Z"),
+      },
+    });
+
+    const response = await handleDeleteVideo(
+      requestForPath(`/api/videos/${video.id}`, fixture.creatorACode, "DELETE"),
+      { id: video.id },
+      {
+        deleteStorage: {
+          async deleteSource() {
+            storageCalls += 1;
+          },
+          async deleteMediaObject() {
+            storageCalls += 1;
+          },
+        },
+      },
+    );
+
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), {
+      reason: "posted history",
+      error: "This video has posted clips. Posted history cannot be deleted.",
+    });
+    assert.equal(storageCalls, 0);
+    assert.equal(
+      await prisma.video.count({
+        where: {
+          id: video.id,
+        },
+      }),
+      1,
+    );
+    assert.equal(
+      await prisma.clip.count({
+        where: {
+          videoId: video.id,
+        },
+      }),
+      1,
+    );
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("delete video cascades rows, deletes R2 objects, and clears Home ready rows", async () => {
+  const fixture = await createFixture();
+  const savedMediaBase = process.env.R2_MEDIA_PUBLIC_BASE;
+  process.env.R2_MEDIA_PUBLIC_BASE = storageEnv.R2_MEDIA_PUBLIC_BASE;
+  const deletedObjects: Array<{ Bucket?: unknown; Key?: unknown }> = [];
+  const s3Client = {
+    async send(command) {
+      deletedObjects.push(recordCommand(command).input);
+      return {};
+    },
+  } satisfies S3ClientLike;
+
+  try {
+    await prisma.schedule.create({
+      data: {
+        creatorId: fixture.creatorAId,
+        slots: [],
+        rotation: {},
+        slotsPerDay: 2,
+        anchorHour: 9,
+      },
+    });
+    const video = await prisma.video.create({
+      data: {
+        creatorId: fixture.creatorAId,
+        contentKey: `delete-cascade-${Date.now()}`,
+        sourceKey: "videos/delete-cascade/source.mp4",
+        status: "clipped",
+        pipelineStage: "done",
+      },
+      select: {
+        id: true,
+      },
+    });
+    fixture.videoId = video.id;
+    const clipA = await prisma.clip.create({
+      data: {
+        creatorId: fixture.creatorAId,
+        videoId: video.id,
+        startMs: 0,
+        endMs: 8_000,
+        renderedUrl: "https://cdn.example/clips/delete-a.mp4",
+        thumbKey: "thumbs/delete-a.jpg",
+        postCopyVariants: {
+          youtube: "Clip A",
+          tiktok: "Clip A #clipmind",
+          instagram: "Clip A\n\n#clipmind",
+        },
+        status: "scheduled",
+        scheduledFor: new Date("2026-07-29T12:00:00.000Z"),
+      },
+      select: {
+        id: true,
+      },
+    });
+    const clipB = await prisma.clip.create({
+      data: {
+        creatorId: fixture.creatorAId,
+        videoId: video.id,
+        startMs: 10_000,
+        endMs: 18_000,
+        renderedUrl: "https://cdn.example/clips/delete-b.mp4",
+        thumbKey: "thumbs/delete-b.jpg",
+        status: "candidate",
+      },
+      select: {
+        id: true,
+      },
+    });
+    await prisma.learningEvent.createMany({
+      data: [
+        {
+          clipId: clipA.id,
+          creatorId: fixture.creatorAId,
+          action: "accept",
+        },
+        {
+          clipId: clipB.id,
+          creatorId: fixture.creatorAId,
+          action: "reject",
+        },
+      ],
+    });
+
+    const beforeHome = await loadHomeOverview(fixture.creatorAId);
+    assert.equal(beforeHome.readyToPost.length, 1);
+    assert.equal(beforeHome.runway.clipCount, 1);
+
+    const response = await handleDeleteVideo(
+      requestForPath(`/api/videos/${video.id}`, fixture.creatorACode, "DELETE"),
+      { id: video.id },
+      {
+        deleteStorage: createR2Storage({
+          env: storageEnv,
+          s3Client,
+        }),
+      },
+    );
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      videoId: video.id,
+      deleted: {
+        learningEvents: 2,
+        clips: 2,
+        videos: 1,
+        objects: 5,
+      },
+    });
+    assert.deepEqual(deletedObjects, [
+      {
+        Bucket: "clipmind-sources",
+        Key: "videos/delete-cascade/source.mp4",
+      },
+      {
+        Bucket: "clipmind-media",
+        Key: "clips/delete-a.mp4",
+      },
+      {
+        Bucket: "clipmind-media",
+        Key: "thumbs/delete-a.jpg",
+      },
+      {
+        Bucket: "clipmind-media",
+        Key: "clips/delete-b.mp4",
+      },
+      {
+        Bucket: "clipmind-media",
+        Key: "thumbs/delete-b.jpg",
+      },
+    ]);
+    assert.equal(
+      await prisma.video.count({
+        where: {
+          id: video.id,
+        },
+      }),
+      0,
+    );
+    assert.equal(
+      await prisma.clip.count({
+        where: {
+          videoId: video.id,
+        },
+      }),
+      0,
+    );
+    assert.equal(
+      await prisma.learningEvent.count({
+        where: {
+          clipId: {
+            in: [clipA.id, clipB.id],
+          },
+        },
+      }),
+      0,
+    );
+
+    const afterHome = await loadHomeOverview(fixture.creatorAId);
+    assert.equal(afterHome.readyToPost.length, 0);
+    assert.equal(afterHome.runway.clipCount, 0);
+  } finally {
+    restoreEnvValue("R2_MEDIA_PUBLIC_BASE", savedMediaBase);
+    await cleanupFixture(fixture);
+  }
+});
+
+test("delete video is creator scoped", async () => {
+  const fixture = await createFixture();
+  let storageCalls = 0;
+
+  try {
+    const video = await createVideo(fixture, {
+      pipelineStage: "done",
+      clipCount: 1,
+    });
+    fixture.videoId = video.id;
+
+    const response = await handleDeleteVideo(
+      requestForPath(`/api/videos/${video.id}`, fixture.creatorBCode, "DELETE"),
+      { id: video.id },
+      {
+        deleteStorage: {
+          async deleteSource() {
+            storageCalls += 1;
+          },
+          async deleteMediaObject() {
+            storageCalls += 1;
+          },
+        },
+      },
+    );
+
+    assert.equal(response.status, 404);
+    assert.equal(storageCalls, 0);
+    assert.equal(
+      await prisma.video.count({
+        where: {
+          id: video.id,
+        },
+      }),
+      1,
+    );
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("delete video tolerates missing R2 objects", async () => {
+  const fixture = await createFixture();
+  const savedMediaBase = process.env.R2_MEDIA_PUBLIC_BASE;
+  process.env.R2_MEDIA_PUBLIC_BASE = storageEnv.R2_MEDIA_PUBLIC_BASE;
+  const attemptedKeys: unknown[] = [];
+  const s3Client = {
+    async send(command) {
+      const input = recordCommand(command).input;
+      attemptedKeys.push(input.Key);
+      const error = new Error(`Missing ${String(input.Key)}`) as Error & {
+        name: string;
+        $metadata: {
+          httpStatusCode: number;
+        };
+      };
+      error.name = "NoSuchKey";
+      error.$metadata = {
+        httpStatusCode: 404,
+      };
+      throw error;
+    },
+  } satisfies S3ClientLike;
+
+  try {
+    const video = await prisma.video.create({
+      data: {
+        creatorId: fixture.creatorAId,
+        contentKey: `missing-r2-${Date.now()}`,
+        sourceKey: "videos/missing-r2/source.mp4",
+        status: "clipped",
+        pipelineStage: "done",
+      },
+      select: {
+        id: true,
+      },
+    });
+    fixture.videoId = video.id;
+    await prisma.clip.create({
+      data: {
+        creatorId: fixture.creatorAId,
+        videoId: video.id,
+        startMs: 0,
+        endMs: 8_000,
+        renderedUrl: "https://cdn.example/clips/missing-r2.mp4",
+        thumbKey: "thumbs/missing-r2.jpg",
+        status: "candidate",
+      },
+    });
+
+    const response = await handleDeleteVideo(
+      requestForPath(`/api/videos/${video.id}`, fixture.creatorACode, "DELETE"),
+      { id: video.id },
+      {
+        deleteStorage: createR2Storage({
+          env: storageEnv,
+          s3Client,
+        }),
+      },
+    );
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(attemptedKeys, [
+      "videos/missing-r2/source.mp4",
+      "clips/missing-r2.mp4",
+      "thumbs/missing-r2.jpg",
+    ]);
+    assert.equal(
+      await prisma.video.count({
+        where: {
+          id: video.id,
+        },
+      }),
+      0,
+    );
+    assert.equal(
+      await prisma.clip.count({
+        where: {
+          videoId: video.id,
+        },
+      }),
+      0,
+    );
+  } finally {
+    restoreEnvValue("R2_MEDIA_PUBLIC_BASE", savedMediaBase);
+    await cleanupFixture(fixture);
+  }
+});
+
 test("retry endpoint is creator scoped and starts a failed-stage retry in the background", async () => {
   const fixture = await createFixture();
   const retryCalls: string[] = [];
@@ -374,6 +764,13 @@ async function createVideo(
 }
 
 async function cleanupFixture(fixture: VideoApiFixture): Promise<void> {
+  await prisma.schedule.deleteMany({
+    where: {
+      creatorId: {
+        in: [fixture.creatorAId, fixture.creatorBId],
+      },
+    },
+  });
   await prisma.learningEvent.deleteMany({
     where: {
       creatorId: {
@@ -432,4 +829,16 @@ async function readUploadBody(source: StorageUploadBody): Promise<string> {
   }
 
   return Buffer.concat(chunks).toString("utf8");
+}
+
+function recordCommand(command: unknown): RecordedCommand {
+  return command as RecordedCommand;
+}
+
+function restoreEnvValue(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
 }

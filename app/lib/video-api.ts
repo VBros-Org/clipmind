@@ -17,6 +17,7 @@ import {
 import { loadCreatorSessionFromCookieHeader } from "./review-auth";
 import {
   createR2Storage,
+  publicMediaKeyFromUrl,
   type R2Storage,
   type StorageUploadBody,
 } from "./storage";
@@ -31,14 +32,18 @@ import {
 
 export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 export const MAX_UPLOAD_BYTES_LABEL = "2 GB";
+export const POSTED_HISTORY_DELETE_MESSAGE =
+  "This video has posted clips. Posted history cannot be deleted.";
 
 type RouteParams = { id: string } | Promise<{ id: string }>;
 type UploadWorkflowStage = PipelineStage | MindOnboardingStage;
 type BackgroundRunResult = PipelineRunResult | FirstVideoOnboardingResult;
+type VideoDeleteStorage = Pick<R2Storage, "deleteSource" | "deleteMediaObject">;
 
 export type VideoApiOptions = {
   prismaClient?: PrismaClient;
   storage?: Pick<R2Storage, "uploadSource">;
+  deleteStorage?: VideoDeleteStorage;
   runPipelineImpl?: (videoId: string) => Promise<BackgroundRunResult>;
   retryPipelineImpl?: (videoId: string) => Promise<BackgroundRunResult>;
   runFirstVideoOnboardingPipelineImpl?: (
@@ -57,6 +62,12 @@ class VideoApiError extends Error {
     message: string,
   ) {
     super(message);
+  }
+}
+
+class PostedHistoryDeleteError extends Error {
+  constructor() {
+    super(POSTED_HISTORY_DELETE_MESSAGE);
   }
 }
 
@@ -217,6 +228,125 @@ export async function handleGetRecentUploads(
     },
     200,
   );
+}
+
+export async function handleDeleteVideo(
+  request: Request,
+  params: RouteParams,
+  options: VideoApiOptions = {},
+): Promise<Response> {
+  const session = await loadCreatorSession(request, options);
+  if (!session) {
+    return json({ error: "Login required." }, 401);
+  }
+
+  const db = options.prismaClient ?? prisma;
+  const id = await videoId(params);
+  const video = await db.video.findFirst({
+    where: {
+      id,
+      creatorId: session.creatorId,
+    },
+    select: {
+      id: true,
+      sourceKey: true,
+      clips: {
+        orderBy: [
+          {
+            createdAt: "asc",
+          },
+          {
+            id: "asc",
+          },
+        ],
+        select: {
+          id: true,
+          status: true,
+          renderedUrl: true,
+          thumbKey: true,
+        },
+      },
+    },
+  });
+
+  if (!video) {
+    return json({ error: "Video not found." }, 404);
+  }
+
+  if (video.clips.some((clip) => clip.status === "posted")) {
+    return postedHistoryResponse();
+  }
+
+  const deleteTargets = videoDeleteTargets(video);
+  const storage = options.deleteStorage ?? createR2Storage();
+  for (const target of deleteTargets) {
+    if (target.bucket === "sources") {
+      await storage.deleteSource(target.key);
+    } else {
+      await storage.deleteMediaObject(target.key);
+    }
+  }
+
+  try {
+    const rowCounts = await db.$transaction(async (tx) => {
+      const postedClipCount = await tx.clip.count({
+        where: {
+          videoId: video.id,
+          creatorId: session.creatorId,
+          status: "posted",
+        },
+      });
+
+      if (postedClipCount > 0) {
+        throw new PostedHistoryDeleteError();
+      }
+
+      const clipIds = video.clips.map((clip) => clip.id);
+      const learningEventDelete = await tx.learningEvent.deleteMany({
+        where: {
+          creatorId: session.creatorId,
+          clipId: {
+            in: clipIds,
+          },
+        },
+      });
+      const clipDelete = await tx.clip.deleteMany({
+        where: {
+          videoId: video.id,
+          creatorId: session.creatorId,
+        },
+      });
+      const videoDelete = await tx.video.deleteMany({
+        where: {
+          id: video.id,
+          creatorId: session.creatorId,
+        },
+      });
+
+      return {
+        learningEvents: learningEventDelete.count,
+        clips: clipDelete.count,
+        videos: videoDelete.count,
+      };
+    });
+
+    return json(
+      {
+        videoId: video.id,
+        deleted: {
+          ...rowCounts,
+          objects: deleteTargets.length,
+        },
+      },
+      200,
+    );
+  } catch (error) {
+    if (error instanceof PostedHistoryDeleteError) {
+      return postedHistoryResponse();
+    }
+
+    throw error;
+  }
 }
 
 export async function handleRetryVideo(
@@ -572,6 +702,43 @@ function normalizedUploadWorkflowStage(video: {
   };
 }
 
+function videoDeleteTargets(video: {
+  sourceKey: string | null;
+  clips: Array<{
+    renderedUrl: string | null;
+    thumbKey: string | null;
+  }>;
+}): Array<{ bucket: "sources" | "media"; key: string }> {
+  const targets: Array<{ bucket: "sources" | "media"; key: string }> = [];
+  const sourceKey = video.sourceKey?.trim();
+  if (sourceKey) {
+    targets.push({
+      bucket: "sources",
+      key: sourceKey,
+    });
+  }
+
+  for (const clip of video.clips) {
+    const renderedKey = publicMediaKeyFromUrl(clip.renderedUrl);
+    if (renderedKey) {
+      targets.push({
+        bucket: "media",
+        key: renderedKey,
+      });
+    }
+
+    const thumbKey = clip.thumbKey?.trim();
+    if (thumbKey) {
+      targets.push({
+        bucket: "media",
+        key: thumbKey,
+      });
+    }
+  }
+
+  return targets;
+}
+
 function headersObject(headers: Headers): Record<string, string> {
   const result: Record<string, string> = {};
   headers.forEach((value, key) => {
@@ -587,6 +754,16 @@ function json(payload: unknown, status: number): Response {
       "Cache-Control": "no-store",
     },
   });
+}
+
+function postedHistoryResponse(): Response {
+  return json(
+    {
+      reason: "posted history",
+      error: POSTED_HISTORY_DELETE_MESSAGE,
+    },
+    409,
+  );
 }
 
 function errorMessage(error: unknown): string {
