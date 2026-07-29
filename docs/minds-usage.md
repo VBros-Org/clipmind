@@ -48,3 +48,4 @@ usage; log them here with date + topic when they happen.
 ## 4. Log new entries below
 
 - 2026-07-29: this log created and backfilled from PR history.
+- 2026-07-29: jam cognition boost received on the gitmgg Mind (+~630 staged credits, swarm 96 -> 725) following the 07-28 Telegram request. Unblocks liberal Mind usage for the taste-feedback build and demo recording.
