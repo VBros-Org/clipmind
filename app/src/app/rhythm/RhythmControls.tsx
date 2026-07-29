@@ -4,13 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
-  MAX_ANCHOR_HOUR,
   MAX_RUNWAY_THRESHOLD_DAYS,
   MAX_SLOTS_PER_DAY,
-  MIN_ANCHOR_HOUR,
   MIN_RUNWAY_THRESHOLD_DAYS,
   MIN_SLOTS_PER_DAY,
-  hourLabel,
+  QUARTER_HOUR_MINUTES,
+  buildEvenSlotTimes,
+  slotTimeParts,
   type ScheduleSettings,
 } from "../../../lib/schedule-settings";
 
@@ -30,8 +30,10 @@ export function RhythmControls({ initialSettings }: RhythmControlsProps) {
   const router = useRouter();
   const [settings, setSettings] = useState(initialSettings);
   const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [editingSlotIndex, setEditingSlotIndex] = useState<number | null>(null);
   const saveToken = useRef(0);
   const clearTimer = useRef<number | null>(null);
+  const slotTimes = slotTimesForSettings(settings);
 
   useEffect(() => {
     if (!settings.pushNudges || !hasGrantedPushPermission()) {
@@ -135,6 +137,53 @@ export function RhythmControls({ initialSettings }: RhythmControlsProps) {
     }
   }
 
+  function updateSlotTime(index: number, slotTime: string) {
+    const nextSlotTimes = [...slotTimes];
+    nextSlotTimes[index] = slotTime;
+    if (hasDuplicateSlotTimes(nextSlotTimes)) {
+      clearSavedTimer();
+      setSaveState("error");
+      return;
+    }
+
+    const sorted = sortSlotTimes(nextSlotTimes);
+    setEditingSlotIndex(sorted.indexOf(slotTime));
+    updateSettings((current) => settingsWithSlotTimes(current, sorted));
+  }
+
+  function addSlot() {
+    if (slotTimes.length >= MAX_SLOTS_PER_DAY) {
+      return;
+    }
+
+    const slotTime = nextAvailableSlotTime(slotTimes);
+    const sorted = sortSlotTimes([...slotTimes, slotTime]);
+    setEditingSlotIndex(sorted.indexOf(slotTime));
+    updateSettings((current) => settingsWithSlotTimes(current, sorted));
+  }
+
+  function removeSlot(index: number) {
+    if (slotTimes.length <= MIN_SLOTS_PER_DAY) {
+      return;
+    }
+
+    const sorted = slotTimes.filter(
+      (_slotTime, slotIndex) => slotIndex !== index,
+    );
+    setEditingSlotIndex((current) => {
+      if (current === null) {
+        return null;
+      }
+
+      if (current === index) {
+        return null;
+      }
+
+      return current > index ? current - 1 : current;
+    });
+    updateSettings((current) => settingsWithSlotTimes(current, sorted));
+  }
+
   return (
     <>
       <section className={styles.card} aria-labelledby="cadence-title">
@@ -144,39 +193,36 @@ export function RhythmControls({ initialSettings }: RhythmControlsProps) {
           </h2>
           <SaveIndicator state={saveState} />
         </div>
-        <p className={styles.preview}>{cadenceSentence(settings)}</p>
-        <div className={styles.controlRow}>
-          <span>Slots per day</span>
-          <Stepper
-            label="Slots per day"
-            max={MAX_SLOTS_PER_DAY}
-            min={MIN_SLOTS_PER_DAY}
-            onChange={(slotsPerDay) =>
-              updateSettings((current) => ({ ...current, slotsPerDay }))
-            }
-            unit={(value) => String(value)}
-            value={settings.slotsPerDay}
-          />
+        <p className={styles.preview} data-testid="cadence-preview">
+          {cadenceSentence(settings)}
+        </p>
+        <div className={styles.slotList} data-testid="slot-list">
+          {slotTimes.map((slotTime, index) => (
+            <SlotTimeRow
+              canRemove={slotTimes.length > MIN_SLOTS_PER_DAY}
+              index={index}
+              isEditing={editingSlotIndex === index}
+              key={index}
+              onRemove={() => removeSlot(index)}
+              onToggleEditing={() =>
+                setEditingSlotIndex((current) =>
+                  current === index ? null : index,
+                )
+              }
+              onUpdate={(nextSlotTime) => updateSlotTime(index, nextSlotTime)}
+              slotTime={slotTime}
+            />
+          ))}
         </div>
-        <label className={styles.selectRow}>
-          First post
-          <select
-            aria-label="First post hour"
-            onChange={(event) =>
-              updateSettings((current) => ({
-                ...current,
-                anchorHour: Number(event.target.value),
-              }))
-            }
-            value={settings.anchorHour}
-          >
-            {hourOptions().map((hour) => (
-              <option key={hour} value={hour}>
-                {hourLabel(hour)}
-              </option>
-            ))}
-          </select>
-        </label>
+        <button
+          className={styles.addSlotButton}
+          data-testid="add-slot-button"
+          disabled={slotTimes.length >= MAX_SLOTS_PER_DAY}
+          onClick={addSlot}
+          type="button"
+        >
+          + Add slot
+        </button>
       </section>
 
       <section className={styles.card} aria-labelledby="nudges-title">
@@ -234,6 +280,96 @@ export function RhythmControls({ initialSettings }: RhythmControlsProps) {
         />
       </section>
     </>
+  );
+}
+
+function SlotTimeRow({
+  canRemove,
+  index,
+  isEditing,
+  onRemove,
+  onToggleEditing,
+  onUpdate,
+  slotTime,
+}: {
+  canRemove: boolean;
+  index: number;
+  isEditing: boolean;
+  onRemove: () => void;
+  onToggleEditing: () => void;
+  onUpdate: (slotTime: string) => void;
+  slotTime: string;
+}) {
+  const slotNumber = index + 1;
+  const parts = slotTimeParts(slotTime);
+
+  return (
+    <div className={styles.slotItem} data-testid={`slot-row-${slotNumber}`}>
+      <div className={styles.slotRow}>
+        <button
+          aria-expanded={isEditing}
+          className={styles.slotButton}
+          data-testid={`slot-time-button-${slotNumber}`}
+          onClick={onToggleEditing}
+          type="button"
+        >
+          <span>Slot {slotNumber}</span>
+          <strong>{slotTime}</strong>
+        </button>
+        <button
+          aria-label={`Remove slot ${slotNumber}`}
+          className={styles.removeSlotButton}
+          disabled={!canRemove}
+          onClick={onRemove}
+          type="button"
+        >
+          -
+        </button>
+      </div>
+      {isEditing ? (
+        <div
+          className={styles.timePicker}
+          data-testid={`slot-picker-${slotNumber}`}
+        >
+          <label className={styles.pickerLabel}>
+            <span>Hour</span>
+            <select
+              aria-label={`Slot ${slotNumber} hour`}
+              onChange={(event) =>
+                onUpdate(
+                  slotTimeFromParts(Number(event.target.value), parts.minute),
+                )
+              }
+              value={parts.hour}
+            >
+              {hourOptions().map((hour) => (
+                <option key={hour} value={hour}>
+                  {String(hour).padStart(2, "0")}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className={styles.pickerLabel}>
+            <span>Minute</span>
+            <select
+              aria-label={`Slot ${slotNumber} minute`}
+              onChange={(event) =>
+                onUpdate(
+                  slotTimeFromParts(parts.hour, Number(event.target.value)),
+                )
+              }
+              value={parts.minute}
+            >
+              {QUARTER_HOUR_MINUTES.map((minute) => (
+                <option key={minute} value={minute}>
+                  {String(minute).padStart(2, "0")}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -339,15 +475,91 @@ function CheckIcon() {
 }
 
 function cadenceSentence(settings: ScheduleSettings): string {
-  const unit = settings.slotsPerDay === 1 ? "post" : "posts";
-  return `${settings.slotsPerDay} ${unit} a day, first at ${hourLabel(
-    settings.anchorHour,
-  )}.`;
+  const slotTimes = slotTimesForSettings(settings);
+  const unit = slotTimes.length === 1 ? "post" : "posts";
+  return `${slotTimes.length} ${unit} a day at ${joinSlotTimes(slotTimes)}.`;
 }
 
 function hourOptions(): number[] {
-  return Array.from(
-    { length: MAX_ANCHOR_HOUR - MIN_ANCHOR_HOUR + 1 },
-    (_value, index) => MIN_ANCHOR_HOUR + index,
+  return Array.from({ length: 24 }, (_value, index) => index);
+}
+
+function slotTimesForSettings(settings: ScheduleSettings): string[] {
+  return (
+    settings.slotTimes ??
+    buildEvenSlotTimes(settings.slotsPerDay, settings.anchorHour)
   );
+}
+
+function settingsWithSlotTimes(
+  current: ScheduleSettings,
+  slotTimes: string[],
+): ScheduleSettings {
+  const firstSlotTime = slotTimes[0] ?? "09:00";
+  const firstSlot = slotTimeParts(firstSlotTime);
+  return {
+    ...current,
+    slotsPerDay: slotTimes.length,
+    anchorHour: firstSlot.hour,
+    slotTimes,
+  };
+}
+
+function sortSlotTimes(slotTimes: string[]): string[] {
+  return [...slotTimes].sort(
+    (left, right) => slotTimeMinutes(left) - slotTimeMinutes(right),
+  );
+}
+
+function hasDuplicateSlotTimes(slotTimes: readonly string[]): boolean {
+  return new Set(slotTimes).size !== slotTimes.length;
+}
+
+function nextAvailableSlotTime(slotTimes: readonly string[]): string {
+  const used = new Set(slotTimes);
+  const last = slotTimes[slotTimes.length - 1] ?? "09:00";
+  let candidateMinutes = (slotTimeMinutes(last) + 6 * 60) % (24 * 60);
+
+  for (let attempts = 0; attempts < 24 * 4; attempts += 1) {
+    const candidate = slotTimeFromMinutes(candidateMinutes);
+    if (!used.has(candidate)) {
+      return candidate;
+    }
+
+    candidateMinutes = (candidateMinutes + 15) % (24 * 60);
+  }
+
+  return "00:00";
+}
+
+function joinSlotTimes(slotTimes: readonly string[]): string {
+  if (slotTimes.length === 1) {
+    return slotTimes[0] ?? "";
+  }
+
+  if (slotTimes.length === 2) {
+    return `${slotTimes[0] ?? ""} and ${slotTimes[1] ?? ""}`;
+  }
+
+  return `${slotTimes.slice(0, -1).join(", ")}, and ${
+    slotTimes[slotTimes.length - 1] ?? ""
+  }`;
+}
+
+function slotTimeFromParts(hour: number, minute: number): string {
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function slotTimeMinutes(slotTime: string): number {
+  const parts = slotTimeParts(slotTime);
+  return parts.hour * 60 + parts.minute;
+}
+
+function slotTimeFromMinutes(totalMinutes: number): string {
+  const minutesInDay = 24 * 60;
+  const normalizedMinutes =
+    ((totalMinutes % minutesInDay) + minutesInDay) % minutesInDay;
+  const hour = Math.floor(normalizedMinutes / 60);
+  const minute = normalizedMinutes % 60;
+  return slotTimeFromParts(hour, minute);
 }

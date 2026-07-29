@@ -7,6 +7,7 @@ import {
   type NudgeCreatorState,
 } from "./nudges";
 import { sendPushNudgeToCreator } from "./push";
+import { scheduleSettingsFromRow } from "./schedule-settings";
 
 type PushTickOptions = {
   prismaClient?: PrismaClient;
@@ -107,6 +108,8 @@ async function loadPushNudgeCreatorStates(
       schedule: {
         select: {
           slotsPerDay: true,
+          anchorHour: true,
+          slotTimes: true,
           reviewReminders: true,
           runwayWarnings: true,
           runwayThresholdDays: true,
@@ -185,7 +188,7 @@ async function loadPushNudgeCreatorStates(
         id: creator.id,
         reviewCount,
         queuedClipCount,
-        schedule: creator.schedule,
+        schedule: scheduleSettingsFromRow(creator.schedule),
         scheduledClips,
         failedVideos,
       };

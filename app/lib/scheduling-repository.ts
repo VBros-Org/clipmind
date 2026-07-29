@@ -67,6 +67,7 @@ export async function scheduleTick(
       select: {
         slotsPerDay: true,
         anchorHour: true,
+        slotTimes: true,
         lastScheduledAt: true,
         rotation: true,
       },

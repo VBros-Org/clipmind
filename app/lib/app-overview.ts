@@ -140,6 +140,7 @@ export async function loadHomeOverview(
       select: {
         slotsPerDay: true,
         anchorHour: true,
+        slotTimes: true,
         reviewReminders: true,
         runwayWarnings: true,
         runwayThresholdDays: true,
@@ -267,8 +268,8 @@ export async function loadHomeOverview(
     }),
   ]);
 
-  const runway = computeRunway(queuedClipCount, schedule);
   const scheduleSettings = scheduleSettingsFromRow(schedule);
+  const runway = computeRunway(queuedClipCount, scheduleSettings);
   const nextUp = nextScheduledClip?.scheduledFor
     ? toNextScheduledClip(nextScheduledClip)
     : null;
@@ -415,6 +416,7 @@ export async function loadRhythmOverview(
         select: {
           slotsPerDay: true,
           anchorHour: true,
+          slotTimes: true,
           reviewReminders: true,
           runwayWarnings: true,
           runwayThresholdDays: true,

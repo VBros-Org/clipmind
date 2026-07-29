@@ -9,6 +9,7 @@ import {
   type SchedulingClip,
   type SchedulingHistoryClip,
 } from "../lib/scheduling";
+import { buildEvenSlotTimes } from "../lib/schedule-settings";
 
 const statuses: ClipSchedulingStatus[] = [
   "candidate",
@@ -149,7 +150,64 @@ test("clip status transition guard accepts only the scheduling state machine pat
   }
 });
 
-test("computeNextSlot uses even UTC spacing from the schedule anchor", () => {
+test("buildEvenSlotTimes mirrors the legacy even-spacing backfill", () => {
+  assert.deepEqual(buildEvenSlotTimes(2, 9), ["09:00", "21:00"]);
+  assert.deepEqual(buildEvenSlotTimes(4, 21), [
+    "03:00",
+    "09:00",
+    "15:00",
+    "21:00",
+  ]);
+  assert.deepEqual(buildEvenSlotTimes(3, 23), ["07:00", "15:00", "23:00"]);
+});
+
+test("computeNextSlot consumes explicit quarter-hour slot times", () => {
+  const cadence = {
+    slotsPerDay: 2,
+    anchorHour: 9,
+    slotTimes: ["09:15", "19:45"],
+    lastScheduledAt: null,
+  };
+
+  assert.equal(
+    computeNextSlot(cadence, date("2026-07-27T08:00:00.000Z")).toISOString(),
+    "2026-07-27T09:15:00.000Z",
+  );
+  assert.equal(
+    computeNextSlot(cadence, date("2026-07-27T09:16:00.000Z")).toISOString(),
+    "2026-07-27T19:45:00.000Z",
+  );
+  assert.equal(
+    computeNextSlot(cadence, date("2026-07-27T20:00:00.000Z")).toISOString(),
+    "2026-07-28T09:15:00.000Z",
+  );
+  assert.equal(
+    computeNextSlot(
+      {
+        ...cadence,
+        lastScheduledAt: date("2026-07-27T09:15:00.000Z"),
+      },
+      date("2026-07-27T09:00:00.000Z"),
+    ).toISOString(),
+    "2026-07-27T19:45:00.000Z",
+  );
+});
+
+test("computeNextSlot validates explicit slot time shape", () => {
+  const invalidCadence = {
+    slotsPerDay: 2,
+    anchorHour: 9,
+    slotTimes: ["09:10", "19:45"],
+    lastScheduledAt: null,
+  };
+
+  assert.throws(
+    () => computeNextSlot(invalidCadence, date("2026-07-27T08:00:00.000Z")),
+    /slotTimes minutes/,
+  );
+});
+
+test("computeNextSlot uses even UTC spacing from the schedule anchor as fallback", () => {
   assert.equal(
     computeNextSlot(
       { slotsPerDay: 4, lastScheduledAt: null },
