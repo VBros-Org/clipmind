@@ -363,9 +363,7 @@
 
 .saveRow {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--cm-space-3);
-  align-items: center;
+  gap: var(--cm-space-2);
 }
 
 .saveButton,
@@ -392,6 +390,22 @@
 .downloadLink {
   border: var(--cm-border-width) solid var(--cm-border);
   color: var(--cm-text-muted);
+}
+
+.saveHint {
+  margin: 0;
+  color: var(--cm-text-soft);
+  font-size: var(--cm-font-secondary);
+  line-height: var(--cm-line-body);
+}
+
+.downloadFallbackRow {
+  display: grid;
+  gap: var(--cm-space-3);
+  border: var(--cm-border-width) solid var(--cm-border);
+  border-radius: var(--cm-radius-action);
+  background: var(--cm-surface-raised);
+  padding: var(--cm-space-3);
 }
 
 .captionPanel {

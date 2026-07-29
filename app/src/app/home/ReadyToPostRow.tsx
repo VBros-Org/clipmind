@@ -3,6 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import {
+  canSharePreparedVideoFile,
+  sharePreparedVideoFile,
+  type PreparedVideoShareNavigator,
+} from "../../../lib/share-prepared-video";
 import styles from "./home.module.css";
 
 type Platform = "youtube" | "tiktok" | "instagram";
@@ -148,47 +153,147 @@ function PostSheet({
   const [copyState, setCopyState] = useState<Platform | null>(null);
   const [isPosting, setIsPosting] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
+  const [isPreparingVideo, setIsPreparingVideo] = useState(false);
+  const [preparedFile, setPreparedFile] = useState<File | null>(null);
+  const [canShareVideo, setCanShareVideo] = useState(false);
   const [shareFallback, setShareFallback] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const canPost = Boolean(clip.renderedUrl);
 
-  async function shareClip() {
-    if (!clip.renderedUrl) {
+  useEffect(() => {
+    const renderedUrl = clip.renderedUrl;
+    const controller = new AbortController();
+    let cancelled = false;
+
+    setPreparedFile(null);
+    setCanShareVideo(false);
+    setShareFallback(false);
+    setError(null);
+
+    if (!renderedUrl) {
+      setIsPreparingVideo(false);
+      return () => {
+        cancelled = true;
+        controller.abort();
+      };
+    }
+
+    const videoUrl = renderedUrl;
+    setIsPreparingVideo(true);
+
+    async function prepareVideoFile() {
+      try {
+        const response = await fetch(videoUrl, {
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error("Video download failed.");
+        }
+
+        const blob = await response.blob();
+        if (cancelled) {
+          return;
+        }
+
+        const file = new File([blob], `clipmind-${clip.id}.mp4`, {
+          type: blob.type || "video/mp4",
+        });
+        const nextCanShare = canSharePreparedVideoFile(
+          navigator as PreparedVideoShareNavigator,
+          file,
+        );
+
+        setPreparedFile(file);
+        setCanShareVideo(nextCanShare);
+        setShareFallback(!nextCanShare);
+      } catch (prepareError) {
+        if (cancelled || errorName(prepareError) === "AbortError") {
+          return;
+        }
+
+        setError("Video could not be prepared.");
+        setShareFallback(true);
+      } finally {
+        if (!cancelled) {
+          setIsPreparingVideo(false);
+        }
+      }
+    }
+
+    void prepareVideoFile();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [clip.id, clip.renderedUrl]);
+
+  function shareClip() {
+    if (!preparedFile || !canShareVideo) {
+      setShareFallback(true);
       return;
     }
+
+    const shareResult = sharePreparedVideoFile(
+      navigator as PreparedVideoShareNavigator,
+      preparedFile,
+    );
 
     setError(null);
     setIsSharing(true);
     setShareFallback(false);
 
-    try {
-      const response = await fetch(clip.renderedUrl);
-      if (!response.ok) {
-        throw new Error("Video download failed.");
-      }
+    void shareResult
+      .then((result) => {
+        if (result.status === "cancelled" || result.status === "shared") {
+          return;
+        }
 
-      const blob = await response.blob();
-      const file = new File([blob], `clipmind-${clip.id}.mp4`, {
-        type: blob.type || "video/mp4",
-      });
-      const shareData: ShareData = {
-        files: [file],
-        title: "ClipMind clip",
-      };
-
-      if (
-        navigator.share &&
-        (!navigator.canShare || navigator.canShare(shareData))
-      ) {
-        await navigator.share(shareData);
-      } else {
         setShareFallback(true);
-      }
-    } catch {
-      setShareFallback(true);
-    } finally {
-      setIsSharing(false);
+        if (result.status === "failed") {
+          setError("Save failed.");
+        }
+      })
+      .finally(() => {
+        setIsSharing(false);
+      });
+  }
+
+  function saveButtonLabel() {
+    if (!canPost || isPreparingVideo || !preparedFile) {
+      return "Preparing video";
     }
+
+    if (isSharing) {
+      return "Saving";
+    }
+
+    return "Save to device";
+  }
+
+  function downloadFallbackCopy() {
+    if (!canPost) {
+      return "The rendered MP4 is not ready yet.";
+    }
+
+    if (!canShareVideo) {
+      return "Download saves this MP4 to Files, not Photos.";
+    }
+
+    return "Save did not work in this browser.";
+  }
+
+  function showDownloadButton() {
+    return Boolean(canPost && shareFallback && !canShareVideo);
+  }
+
+  function errorName(error: unknown): string | null {
+    if (!error || typeof error !== "object" || !("name" in error)) {
+      return null;
+    }
+
+    const name = (error as { name?: unknown }).name;
+    return typeof name === "string" ? name : null;
   }
 
   async function copyCaption(platform: Platform) {
@@ -264,24 +369,29 @@ function PostSheet({
           <button
             className={styles.saveButton}
             data-testid="save-share-button"
-            disabled={!canPost || isSharing}
+            disabled={!canPost || !preparedFile || !canShareVideo || isSharing}
             onClick={shareClip}
             type="button"
           >
-            {isSharing ? "Preparing" : "Save to device"}
+            {saveButtonLabel()}
           </button>
-          {clip.renderedUrl ? (
-            <a
-              className={styles.downloadLink}
-              download
-              href={clip.renderedUrl}
-            >
-              Download
-            </a>
+          {preparedFile && canShareVideo ? (
+            <p className={styles.saveHint}>choose Save Video to add it to Photos.</p>
           ) : null}
         </div>
         {shareFallback ? (
-          <p className={styles.postNotice}>Use Download for this browser.</p>
+          <div className={styles.downloadFallbackRow}>
+            <p className={styles.postNotice}>{downloadFallbackCopy()}</p>
+            {showDownloadButton() && clip.renderedUrl ? (
+              <a
+                className={styles.downloadLink}
+                download
+                href={clip.renderedUrl}
+              >
+                Download
+              </a>
+            ) : null}
+          </div>
         ) : null}
 
         <section className={styles.captionPanel} aria-label="Platform captions">

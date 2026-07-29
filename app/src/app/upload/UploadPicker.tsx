@@ -12,6 +12,17 @@ import {
   type StatusResponse,
   type UploadView,
 } from "../../../lib/upload-status-client";
+import {
+  createScreenWakeLockManager,
+  type ScreenWakeLockManager,
+} from "../../../lib/screen-wake-lock";
+import {
+  uploadTransferFailed,
+  uploadTransferIdle,
+  uploadTransferStarted,
+  uploadTransferSucceeded,
+  type UploadTransferState,
+} from "../../../lib/upload-transfer-state";
 import styles from "./upload.module.css";
 
 type UploadProgress = {
@@ -101,11 +112,15 @@ export function UploadPicker({
   explainer?: string;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const wakeLockRef = useRef<ScreenWakeLockManager | null>(null);
   const [uploads, setUploads] = useState(initialUploads);
   const [activeVideoId, setActiveVideoId] = useState<string | null>(
     () => initialUploads.find((upload) => isProcessing(upload.pipelineStage))?.id ?? null,
   );
   const [progress, setProgress] = useState<UploadProgress | null>(null);
+  const [transferState, setTransferState] = useState<UploadTransferState<File>>(
+    () => uploadTransferIdle(),
+  );
   const [uploadError, setUploadError] = useState<string | null>(null);
 
   const activeUpload = useMemo(
@@ -137,6 +152,17 @@ export function UploadPicker({
   function openPicker() {
     inputRef.current?.click();
   }
+
+  function getWakeLockManager() {
+    wakeLockRef.current ??= createScreenWakeLockManager(navigator, document);
+    return wakeLockRef.current;
+  }
+
+  useEffect(() => {
+    return () => {
+      void wakeLockRef.current?.stop();
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -207,13 +233,20 @@ export function UploadPicker({
       return;
     }
 
+    await startUploadTransfer(file);
+  }
+
+  async function startUploadTransfer(file: File) {
     setUploadError(null);
+    setActiveVideoId(null);
+    setTransferState(uploadTransferStarted());
     setProgress({
       fileName: file.name,
       loaded: 0,
       total: file.size,
       percent: 0,
     });
+    void getWakeLockManager().start();
 
     try {
       const response = await uploadFile(file, (nextProgress) => {
@@ -233,14 +266,25 @@ export function UploadPicker({
         [upload, ...current.filter((item) => item.id !== upload.id)].slice(0, 3),
       );
       setActiveVideoId(upload.id);
+      setTransferState(uploadTransferSucceeded());
     } catch (error) {
+      setTransferState(uploadTransferFailed(file));
       setUploadError(errorMessage(error));
     } finally {
       setProgress(null);
+      void wakeLockRef.current?.stop();
       if (inputRef.current) {
         inputRef.current.value = "";
       }
     }
+  }
+
+  async function tryFailedTransferAgain() {
+    if (!transferState.retryFile || progress) {
+      return;
+    }
+
+    await startUploadTransfer(transferState.retryFile);
   }
 
   async function retryUpload(videoId: string) {
@@ -333,6 +377,20 @@ export function UploadPicker({
         </section>
       ) : null}
 
+      {transferState.notice ? (
+        <p
+          className={`${styles.transferNotice} ${
+            styles[`transferNotice_${transferState.notice}`]
+          }`}
+          data-testid="upload-transfer-notice"
+          aria-live="polite"
+        >
+          {transferState.notice === "uploading"
+            ? "Keep ClipMind open while this uploads."
+            : "Safe to leave. We will nudge you when clips are ready."}
+        </p>
+      ) : null}
+
       {activeUpload ? (
         <section className={styles.checklist} aria-label="Upload pipeline">
           {visibleSteps(includeMindSteps).map((step) => (
@@ -352,9 +410,19 @@ export function UploadPicker({
       ) : null}
 
       {uploadError ? (
-        <p className={styles.errorText} role="alert">
-          {uploadError}
-        </p>
+        <div className={styles.errorPanel} role="alert">
+          <p className={styles.errorText}>{uploadError}</p>
+          {transferState.retryFile ? (
+            <button
+              className={styles.tryAgainButton}
+              disabled={progress !== null}
+              onClick={tryFailedTransferAgain}
+              type="button"
+            >
+              Try again
+            </button>
+          ) : null}
+        </div>
       ) : null}
 
       <section className={styles.recentBlock} aria-labelledby="recent-uploads-title">
