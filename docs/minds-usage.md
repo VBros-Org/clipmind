@@ -50,3 +50,4 @@ usage; log them here with date + topic when they happen.
 
 - 2026-07-29: this log created and backfilled from PR history.
 - 2026-07-29: jam cognition boost received on the gitmgg Mind (+~630 staged credits, swarm 96 -> 725) following the 07-28 Telegram request. Unblocks liberal Mind usage for the taste-feedback build and demo recording.
+- 2026-07-29: George chat-window session with gitmgg (hellominds.ai): asked the Mind to critique its own four ranking reasons from the taste test. It kept the ranked order but revised its reasoning (fence-fail upweighted citing the T18 accepted-verdict feedback; cave clip reframed as "curiosity without resolution"; inventory flaw identified as missing framing, not topic). Notable: the critique cited the API-delivered taste feedback unprompted - one memory across chat and API surfaces. No product prompt change needed; the Mind self-corrected via Priors, which is the intended division of labor.
