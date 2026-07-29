@@ -18,6 +18,7 @@ the product's memory and judgment; the deterministic backend owns all control fl
 | Onboarding | Creator's corpus is distilled into a voice + clip-taste profile and seeded into the Mind as persistent Tenets (covenant clipmind.creatorVoiceAndClipTaste.v1); verified by asking the Mind to recite from a second conversation | lib/onboarding.ts, lib/minds.ts, prompts/tenet-seed | PR #12, #42; conversation aliases clipmind-onboarding-*, clipmind-verify-* |
 | Ranking | The Mind ranks candidate clips by that creator's remembered taste and explains each pick in its own words | lib/ranking.ts, prompts/rank-clips | PR #20 (live output: rank reasons citing seeded signature beats); aliases clipmind-rank-* |
 | Captions | The Mind writes per-platform post-copy in the creator's remembered voice; backend applies platform norms deterministically | lib/captioning.ts, prompts/caption-clip | PR #22 (live variants echoing Tenet phrasing habits); aliases clipmind-caption-* |
+| Taste feedback | The Mind learns from batched accepted and rejected verdict facts, updating only the creator's clip-taste Priors while deterministic code marks clips synced | lib/tasteFeedback.ts, prompts/taste-feedback | PR #45; aliases clipmind-feedback-<creator-short>-<timestamp>-<counter> |
 | Persistence proof | Same Mind, different conversations, days apart: Tenets recalled and applied without re-teaching. This is the jam's memory/continuity requirement demonstrated in production paths | docs/minds-validation.md | T0 findings 2026-07-26; T4 live proof 07-27; T8/T9 live proofs 07-28 |
 
 Autonomous follow-up (third jam requirement): the scheduler computes posting slots and
@@ -40,7 +41,7 @@ The Mind's judgments (ranks, captions) are what those nudges deliver.
 API-driven conversations live on each Mind under these alias patterns and are
 inspectable via the messaging history endpoint (and by the Minds team platform-side):
 clipmind-onboarding-<mind>, clipmind-verify-<mind>, clipmind-rank-<video>,
-clipmind-caption-<clip>.
+clipmind-caption-<clip>, clipmind-feedback-<creator-short>-<timestamp>-<counter>.
 
 Direct chat-window sessions with the gitmgg Mind (hellominds.ai) also count as build
 usage; log them here with date + topic when they happen.

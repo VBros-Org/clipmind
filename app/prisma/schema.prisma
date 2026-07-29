@@ -80,6 +80,7 @@ model Clip {
   status           ClipStatus @default(candidate)
   scheduledFor     DateTime?
   postedAt         DateTime?
+  feedbackSyncedAt DateTime?
   createdAt        DateTime   @default(now())
 }
 

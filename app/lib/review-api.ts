@@ -11,15 +11,26 @@ import {
 import type { renderClip } from "./render";
 import { markPostedForCreator, runSchedulePass } from "./scheduling-repository";
 import type { R2Storage } from "./storage";
+import {
+  triggerTasteFeedbackSyncAfterVerdict,
+  type TriggerTasteFeedbackSyncOptions,
+  type TriggerTasteFeedbackSyncResult,
+} from "./tasteFeedback";
 
 type RouteParams = { id: string } | Promise<{ id: string }>;
 
 type ReviewApiOptions = {
   prismaClient?: PrismaClient;
   renderClipImpl?: typeof renderClip;
+  triggerTasteFeedbackSyncImpl?: TriggerTasteFeedbackSyncImpl;
   now?: Date;
   storage?: Pick<R2Storage, "presignSourceUrl">;
 };
+
+type TriggerTasteFeedbackSyncImpl = (
+  creatorId: string,
+  options?: TriggerTasteFeedbackSyncOptions,
+) => Promise<TriggerTasteFeedbackSyncResult>;
 
 export async function handleGetClip(
   request: Request,
@@ -95,6 +106,7 @@ export async function handleAcceptClip(
       result.presetId,
       options.renderClipImpl,
     );
+    startTasteFeedbackAfterVerdict(session.creatorId, options);
 
     return json(
       {
@@ -136,6 +148,8 @@ export async function handleRejectClip(
     if (!clip) {
       return json({ error: "Clip not found." }, 404);
     }
+
+    startTasteFeedbackAfterVerdict(session.creatorId, options);
 
     return json({ clip: serializeClip(clip) }, 200);
   } catch (error) {
@@ -207,6 +221,22 @@ function transitionErrorResponse(error: unknown): Response {
   throw error;
 }
 
+function startTasteFeedbackAfterVerdict(
+  creatorId: string,
+  options: ReviewApiOptions,
+): void {
+  const trigger =
+    options.triggerTasteFeedbackSyncImpl ?? triggerTasteFeedbackSyncAfterVerdict;
+
+  void trigger(creatorId, {
+    prismaClient: options.prismaClient,
+  }).catch((error: unknown) => {
+    console.error(
+      `Taste feedback trigger failed for creator ${creatorId}: ${errorMessage(error)}`,
+    );
+  });
+}
+
 function serializeClip(clip: {
   id: string;
   videoId: string;
@@ -244,4 +274,8 @@ function json(payload: unknown, status: number): Response {
       "Cache-Control": "no-store",
     },
   });
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

@@ -377,6 +377,15 @@
     calc(var(--cm-space-3) + env(safe-area-inset-bottom));
 }
 
+.learningNote {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--cm-text-muted);
+  font-size: var(--cm-font-secondary);
+  font-weight: 800;
+  text-align: center;
+}
+
 .actionButton {
   min-height: var(--cm-action-height);
   border: 0;

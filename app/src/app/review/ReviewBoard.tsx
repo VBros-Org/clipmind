@@ -214,6 +214,7 @@ function ReviewSheet({
   const [copyState, setCopyState] = useState<Platform | null>(null);
   const [preview, setPreview] = useState<PreviewPayload | null>(null);
   const [previewFailed, setPreviewFailed] = useState(false);
+  const [learningNote, setLearningNote] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canReview = clip.status === "candidate";
   const videoSource = clip.renderedUrl ?? preview?.previewUrl ?? null;
@@ -223,6 +224,10 @@ function ReviewSheet({
     setIsRendering(isRenderPending(clip));
     setCopyState(null);
   }, [clip.id, clip.renderedUrl, clip.status]);
+
+  useEffect(() => {
+    setLearningNote(false);
+  }, [clip.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -309,6 +314,7 @@ function ReviewSheet({
       };
       updateClip(body.clip);
       setIsRendering(body.rendering && !body.clip.renderedUrl);
+      setLearningNote(true);
     } finally {
       setIsBusy(false);
     }
@@ -328,6 +334,7 @@ function ReviewSheet({
       const body = (await response.json()) as { clip: ReviewClipView };
       updateClip(body.clip);
       setIsRendering(false);
+      setLearningNote(true);
     } finally {
       setIsBusy(false);
     }
@@ -447,6 +454,9 @@ function ReviewSheet({
       </div>
 
       <div className={styles.sheetActions}>
+        {learningNote ? (
+          <p className={styles.learningNote}>Your Mind will learn from this.</p>
+        ) : null}
         <button
           className={`${styles.actionButton} ${styles.rejectButton}`}
           disabled={!canReview || isBusy}
