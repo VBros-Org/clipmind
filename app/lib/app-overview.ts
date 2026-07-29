@@ -16,6 +16,7 @@ import { countPostedThisWeek } from "./posting-stats";
 import { scheduleSettingsFromRow, type ScheduleSettings } from "./schedule-settings";
 import { publicMediaUrlForKey } from "./storage";
 import { formatVideoLabel } from "./video-label";
+import { captionCorpusSummary } from "./caption-corpus";
 import type { PostCopyVariants } from "./captioning";
 import {
   creatorHasReadyMind,
@@ -85,6 +86,9 @@ export type RhythmOverview = {
     displayName: string | null;
     channelUrl: string | null;
     captionPreset: string;
+    captionCorpus: string;
+    captionCount: number;
+    hasMind: boolean;
   };
 };
 
@@ -405,6 +409,8 @@ export async function loadRhythmOverview(
       displayName: true,
       channelUrl: true,
       captionStyle: true,
+      captionCorpus: true,
+      mindId: true,
       schedule: {
         select: {
           slotsPerDay: true,
@@ -418,6 +424,7 @@ export async function loadRhythmOverview(
       },
     },
   });
+  const corpus = captionCorpusSummary(creator.captionCorpus);
 
   return {
     schedule: scheduleSettingsFromRow(creator.schedule),
@@ -425,6 +432,9 @@ export async function loadRhythmOverview(
       displayName: creator.displayName,
       channelUrl: creator.channelUrl,
       captionPreset: captionPresetFromStyle(creator.captionStyle),
+      captionCorpus: corpus.captionCorpus,
+      captionCount: corpus.captionCount,
+      hasMind: Boolean(creator.mindId?.trim()),
     },
   };
 }

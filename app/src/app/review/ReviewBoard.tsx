@@ -4,6 +4,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
+import {
+  REJECT_REASONS,
+  type RejectReason,
+} from "../../../lib/reject-reasons";
+import {
+  REJECT_UNDO_WINDOW_MS,
+  RejectUndoTimer,
+  type RejectUndoCommitCause,
+  type RejectUndoSnapshot,
+} from "../../../lib/reject-undo";
 import { deleteVideo } from "../../../lib/video-delete-client";
 import {
   VideoDeleteSheet,
@@ -34,6 +44,7 @@ export type ReviewClipView = {
   transcript: string | null;
   mindRank: number | null;
   mindRankReason: string | null;
+  rejectReason: string | null;
   createdAt: string;
 };
 
@@ -57,6 +68,11 @@ type PreviewPayload = {
   endMs: number;
 };
 
+type RejectReasonPrompt = {
+  clipId: string;
+  deadlineMs: number;
+};
+
 const PLATFORMS: { id: Platform; label: string }[] = [
   { id: "youtube", label: "YouTube" },
   { id: "tiktok", label: "TikTok" },
@@ -70,8 +86,94 @@ export function ReviewBoard({ groups: initialGroups, initialClipId }: ReviewBoar
   const [deleteTarget, setDeleteTarget] = useState<VideoDeleteTarget | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [pendingRejects, setPendingRejects] = useState<
+    Record<string, RejectUndoSnapshot>
+  >({});
+  const [rejectReasonPrompts, setRejectReasonPrompts] = useState<
+    Record<string, RejectReasonPrompt>
+  >({});
+  const [reasonSavingClipId, setReasonSavingClipId] = useState<string | null>(null);
   const didReadInitialClip = useRef(false);
+  const rejectUndoTimer = useRef<RejectUndoTimer | null>(null);
+  const commitRejectRef = useRef<
+    (clipId: string, cause: RejectUndoCommitCause) => void
+  >(() => {});
+  const mountedRef = useRef(false);
+  const reasonPromptTimers = useRef<Map<string, number>>(new Map());
   const clipCount = groups.reduce((total, group) => total + group.clips.length, 0);
+
+  commitRejectRef.current = (clipId, cause) => {
+    void commitDeferredReject(clipId, cause);
+  };
+
+  useEffect(() => {
+    mountedRef.current = true;
+    const timer = new RejectUndoTimer({
+      commit(clipId, cause) {
+        commitRejectRef.current(clipId, cause);
+      },
+      setTimeoutImpl: (handler, timeoutMs) =>
+        window.setTimeout(handler, timeoutMs),
+      clearTimeoutImpl: (handle) => window.clearTimeout(handle as number),
+    });
+    rejectUndoTimer.current = timer;
+
+    const commitForVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        timer.commitAll("background");
+      }
+    };
+    const commitForNavigation = () => {
+      timer.commitAll("navigation");
+    };
+
+    document.addEventListener("visibilitychange", commitForVisibility);
+    window.addEventListener("pagehide", commitForNavigation);
+    window.addEventListener("beforeunload", commitForNavigation);
+
+    return () => {
+      mountedRef.current = false;
+      timer.commitAll("navigation");
+      rejectUndoTimer.current = null;
+      document.removeEventListener("visibilitychange", commitForVisibility);
+      window.removeEventListener("pagehide", commitForNavigation);
+      window.removeEventListener("beforeunload", commitForNavigation);
+      for (const timeout of reasonPromptTimers.current.values()) {
+        window.clearTimeout(timeout);
+      }
+      reasonPromptTimers.current.clear();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (Object.keys(pendingRejects).length === 0) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      const timer = rejectUndoTimer.current;
+      if (!timer) {
+        return;
+      }
+
+      setPendingRejects((current) => {
+        const next = Object.fromEntries(
+          Object.keys(current)
+            .map((clipId) => [clipId, timer.snapshot(clipId)] as const)
+            .filter(
+              (entry): entry is readonly [string, RejectUndoSnapshot] =>
+                entry[1] !== null,
+            ),
+        );
+
+        return sameSnapshotMap(current, next) ? current : next;
+      });
+    }, 150);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [pendingRejects]);
 
   useEffect(() => {
     if (didReadInitialClip.current) {
@@ -126,6 +228,114 @@ export function ReviewBoard({ groups: initialGroups, initialClipId }: ReviewBoar
       clipCount: group.totalClips,
     });
     setDeleteError(null);
+  }
+
+  function startDeferredReject(clip: ReviewClipView) {
+    const timer = rejectUndoTimer.current;
+    if (!timer) {
+      return;
+    }
+
+    // Accept is intentionally immediate because it commits scheduling and render work.
+    // Reject is client-deferred so a thumb slip can be undone without adding a status.
+    const snapshot = timer.start(clip.id);
+    setPendingRejects((current) => ({
+      ...current,
+      [clip.id]: snapshot,
+    }));
+    dismissRejectReasons(clip.id);
+    closeClip();
+  }
+
+  function undoReject(clipId: string) {
+    if (!rejectUndoTimer.current?.undo(clipId)) {
+      return;
+    }
+
+    setPendingRejects((current) => withoutKey(current, clipId));
+  }
+
+  async function commitDeferredReject(
+    clipId: string,
+    cause: RejectUndoCommitCause,
+  ) {
+    if (mountedRef.current) {
+      setPendingRejects((current) => withoutKey(current, clipId));
+    }
+
+    try {
+      const response = await fetch(`/api/clips/${clipId}/reject`, {
+        method: "POST",
+        keepalive: cause !== "timer",
+      });
+
+      if (!response.ok) {
+        return;
+      }
+
+      const body = (await response.json()) as { clip: ReviewClipView };
+      if (!mountedRef.current) {
+        return;
+      }
+
+      updateClip(body.clip);
+      showRejectReasons(clipId);
+    } catch (error) {
+      console.error("Deferred reject failed", error);
+    }
+  }
+
+  function showRejectReasons(clipId: string) {
+    dismissRejectReasons(clipId);
+    const deadlineMs = Date.now() + 8_000;
+    setRejectReasonPrompts((current) => ({
+      ...current,
+      [clipId]: {
+        clipId,
+        deadlineMs,
+      },
+    }));
+    reasonPromptTimers.current.set(
+      clipId,
+      window.setTimeout(() => {
+        dismissRejectReasons(clipId);
+      }, 8_000),
+    );
+  }
+
+  function dismissRejectReasons(clipId: string) {
+    const timeout = reasonPromptTimers.current.get(clipId);
+    if (timeout !== undefined) {
+      window.clearTimeout(timeout);
+      reasonPromptTimers.current.delete(clipId);
+    }
+    setRejectReasonPrompts((current) => withoutKey(current, clipId));
+  }
+
+  async function saveRejectReason(clipId: string, rejectReason: RejectReason) {
+    setReasonSavingClipId(clipId);
+
+    try {
+      const response = await fetch(`/api/clips/${clipId}/reject`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          rejectReason,
+        }),
+      });
+
+      if (!response.ok) {
+        return;
+      }
+
+      const body = (await response.json()) as { clip: ReviewClipView };
+      updateClip(body.clip);
+      dismissRejectReasons(clipId);
+    } finally {
+      setReasonSavingClipId(null);
+    }
   }
 
   async function confirmDeleteVideo() {
@@ -193,7 +403,17 @@ export function ReviewBoard({ groups: initialGroups, initialClipId }: ReviewBoar
             </header>
             <div className={styles.clipStrip}>
               {group.clips.map((clip) => (
-                <ClipCard clip={clip} key={clip.id} openClip={openClip} />
+                <ClipCard
+                  clip={clip}
+                  isReasonSaving={reasonSavingClipId === clip.id}
+                  key={clip.id}
+                  openClip={openClip}
+                  pendingReject={pendingRejects[clip.id] ?? null}
+                  rejectReasonPrompt={rejectReasonPrompts[clip.id] ?? null}
+                  saveRejectReason={saveRejectReason}
+                  dismissRejectReasons={dismissRejectReasons}
+                  undoReject={undoReject}
+                />
               ))}
             </div>
           </section>
@@ -204,6 +424,7 @@ export function ReviewBoard({ groups: initialGroups, initialClipId }: ReviewBoar
         <ReviewSheet
           clip={activeClip}
           closeClip={closeClip}
+          deferReject={startDeferredReject}
           updateClip={updateClip}
         />
       ) : null}
@@ -227,55 +448,132 @@ export function ReviewBoard({ groups: initialGroups, initialClipId }: ReviewBoar
 
 function ClipCard({
   clip,
+  dismissRejectReasons,
+  isReasonSaving,
   openClip,
+  pendingReject,
+  rejectReasonPrompt,
+  saveRejectReason,
+  undoReject,
 }: {
   clip: ReviewClipView;
+  dismissRejectReasons: (clipId: string) => void;
+  isReasonSaving: boolean;
   openClip: (clipId: string) => void;
+  pendingReject: RejectUndoSnapshot | null;
+  rejectReasonPrompt: RejectReasonPrompt | null;
+  saveRejectReason: (clipId: string, rejectReason: RejectReason) => void;
+  undoReject: (clipId: string) => void;
 }) {
   const isRendering = isRenderPending(clip);
   const isRejected = clip.status === "rejected";
+  const isPendingReject = pendingReject !== null;
 
   return (
-    <button
+    <article
       className={`${styles.clipCard} ${isRejected ? styles.rejectedCard : ""}`}
-      data-testid="clip-card"
-      onClick={() => openClip(clip.id)}
-      type="button"
     >
-      <span className={styles.thumb}>
-        {clip.thumbUrl ? (
-          <img
-            alt=""
-            className={styles.thumbImage}
-            data-testid="review-thumb"
-            src={clip.thumbUrl}
-          />
-        ) : (
-          <span className={styles.poster} aria-hidden="true" />
-        )}
-        <span className={styles.rankBadge} data-testid="rank-badge">
-          {rankBadge(clip.mindRank)}
+      <button
+        className={styles.clipCardButton}
+        data-testid="clip-card"
+        disabled={isPendingReject}
+        onClick={() => openClip(clip.id)}
+        type="button"
+      >
+        <span className={styles.thumb}>
+          {clip.thumbUrl ? (
+            <img
+              alt=""
+              className={styles.thumbImage}
+              data-testid="review-thumb"
+              src={clip.thumbUrl}
+            />
+          ) : (
+            <span className={styles.poster} aria-hidden="true" />
+          )}
+          <span className={styles.rankBadge} data-testid="rank-badge">
+            {rankBadge(clip.mindRank)}
+          </span>
+          <span className={styles.durationChip} data-testid="duration-chip">
+            {formatDuration(clip.startMs, clip.endMs)}
+          </span>
+          {isRendering ? <span className={styles.renderChip}>rendering</span> : null}
         </span>
-        <span className={styles.durationChip} data-testid="duration-chip">
-          {formatDuration(clip.startMs, clip.endMs)}
+        <span className={styles.cardReason}>
+          {clip.mindRankReason || "No Mind reason saved."}
         </span>
-        {isRendering ? <span className={styles.renderChip}>rendering</span> : null}
-      </span>
-      <span className={styles.cardReason}>
-        {clip.mindRankReason || "No Mind reason saved."}
-      </span>
-      <span className={styles.cardStatus}>{statusLabel(clip.status, isRendering)}</span>
-    </button>
+        <span className={styles.cardStatus}>
+          {statusLabel(clip, isRendering, pendingReject)}
+        </span>
+      </button>
+
+      {pendingReject ? (
+        <div className={styles.rejectUndo} data-testid="reject-undo-state">
+          <button
+            className={styles.undoButton}
+            data-testid="reject-undo-button"
+            onClick={() => undoReject(clip.id)}
+            type="button"
+          >
+            Undo
+          </button>
+          <span className={styles.undoTrack} aria-hidden="true">
+            <span
+              className={styles.undoBar}
+              style={{
+                transform: `scaleX(${Math.max(
+                  0,
+                  Math.min(1, pendingReject.remainingMs / REJECT_UNDO_WINDOW_MS),
+                )})`,
+              }}
+            />
+          </span>
+        </div>
+      ) : null}
+
+      {rejectReasonPrompt ? (
+        <div className={styles.reasonChips} data-testid="reject-reason-chips">
+          <div className={styles.reasonChipHeader}>
+            <span>Reason</span>
+            <button
+              aria-label="Dismiss reject reasons"
+              className={styles.dismissReasonButton}
+              data-testid="dismiss-reject-reasons"
+              onClick={() => dismissRejectReasons(clip.id)}
+              type="button"
+            >
+              X
+            </button>
+          </div>
+          <div className={styles.reasonChipGrid}>
+            {REJECT_REASONS.map((rejectReason) => (
+              <button
+                className={styles.reasonChip}
+                data-testid={`reject-reason-${reasonSlug(rejectReason)}`}
+                disabled={isReasonSaving}
+                key={rejectReason}
+                onClick={() => saveRejectReason(clip.id, rejectReason)}
+                type="button"
+              >
+                {rejectReason}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </article>
   );
 }
 
 function ReviewSheet({
   clip,
   closeClip,
+  deferReject,
   updateClip,
 }: {
   clip: ReviewClipView;
   closeClip: () => void;
+  deferReject: (clip: ReviewClipView) => void;
   updateClip: (clip: ReviewClipView) => void;
 }) {
   const [isBusy, setIsBusy] = useState(false);
@@ -391,24 +689,9 @@ function ReviewSheet({
     }
   }
 
-  async function rejectClip() {
-    setIsBusy(true);
-    try {
-      const response = await fetch(`/api/clips/${clip.id}/reject`, {
-        method: "POST",
-      });
-
-      if (!response.ok) {
-        return;
-      }
-
-      const body = (await response.json()) as { clip: ReviewClipView };
-      updateClip(body.clip);
-      setIsRendering(false);
-      setLearningNote(true);
-    } finally {
-      setIsBusy(false);
-    }
+  function rejectClip() {
+    setIsRendering(false);
+    deferReject(clip);
   }
 
   function seekToStart() {
@@ -611,16 +894,28 @@ function transcriptLine(transcript: string | null): string {
   return text;
 }
 
-function statusLabel(status: ClipStatus, isRendering: boolean): string {
+function statusLabel(
+  clip: ReviewClipView,
+  isRendering: boolean,
+  pendingReject: RejectUndoSnapshot | null,
+): string {
+  if (pendingReject) {
+    return `Rejected - Undo ${Math.ceil(pendingReject.remainingMs / 1000)}s`;
+  }
+
   if (isRendering) {
     return "rendering";
   }
 
-  if (status === "rejected") {
+  if (clip.rejectReason) {
+    return `rejected: ${clip.rejectReason}`;
+  }
+
+  if (clip.status === "rejected") {
     return "rejected";
   }
 
-  return status;
+  return clip.status;
 }
 
 function isRenderPending(clip: Pick<ReviewClipView, "status" | "renderedUrl">): boolean {
@@ -628,4 +923,35 @@ function isRenderPending(clip: Pick<ReviewClipView, "status" | "renderedUrl">): 
     (clip.status === "accepted" || clip.status === "scheduled") &&
     !clip.renderedUrl
   );
+}
+
+function withoutKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  if (!(key in record)) {
+    return record;
+  }
+
+  const next = { ...record };
+  delete next[key];
+  return next;
+}
+
+function sameSnapshotMap(
+  left: Record<string, RejectUndoSnapshot>,
+  right: Record<string, RejectUndoSnapshot>,
+): boolean {
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) {
+    return false;
+  }
+
+  return leftKeys.every(
+    (key) =>
+      left[key]?.deadlineMs === right[key]?.deadlineMs &&
+      left[key]?.remainingMs === right[key]?.remainingMs,
+  );
+}
+
+function reasonSlug(rejectReason: RejectReason): string {
+  return rejectReason.replace(/\s+/g, "-");
 }

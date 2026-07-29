@@ -33,7 +33,14 @@ export interface MindCreationResult {
 
 export interface MindsClient {
   createMind(name: string, stewardEmail: string): Promise<MindCreationResult>;
-  addTenets(mindId: string, tenets: InitialTenets): Promise<void>;
+  addTenets(
+    mindId: string,
+    tenets: InitialTenets,
+    options?: {
+      alias?: string;
+      action?: string;
+    },
+  ): Promise<string>;
   verifyTenets(mindId: string): Promise<string>;
   sendMessageAndWaitForReply(args: MindMessageRequest): Promise<string>;
 }
@@ -147,15 +154,21 @@ class BuilderApiMindsClient implements MindsClient {
     return { mindId, mindEmail };
   }
 
-  async addTenets(mindId: string, tenets: InitialTenets): Promise<void> {
-    const alias = buildConversationAlias(TENET_SEED_ALIAS_PREFIX, mindId);
+  async addTenets(
+    mindId: string,
+    tenets: InitialTenets,
+    options: { alias?: string; action?: string } = {},
+  ): Promise<string> {
+    const alias =
+      options.alias?.trim() ||
+      buildConversationAlias(TENET_SEED_ALIAS_PREFIX, mindId);
     const messageText = buildTenetSeedMessage(tenets);
 
-    await this.sendMessageAndWaitForReply({
+    return this.sendMessageAndWaitForReply({
       mindId,
       alias,
       messageText,
-      action: "Tenet seed",
+      action: options.action?.trim() || "Tenet seed",
     });
   }
 

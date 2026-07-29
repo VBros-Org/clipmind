@@ -5,6 +5,7 @@ export type TasteFeedbackPromptClip = {
   durationMs: number;
   mindRank: number | null;
   mindRankReason: string | null;
+  rejectReason: string | null;
 };
 
 export type TasteFeedbackPromptInput = {
@@ -25,6 +26,7 @@ export function buildTasteFeedbackMessage(
     "Do not touch the creator's voice profile, caption style, safety guardrails, or workflow rules.",
     "Do not change clip statuses, rankings, captions, schedules, or any past output. The backend owns those fields.",
     "Accepted clips are positive taste signals. Rejected clips are negative taste signals.",
+    "Optional reject reasons explain the negative signal. Treat not my style and wrong vibe as taste feedback. Treat weak moment as low payoff feedback. Treat bad clip window as a candidate detection or cut-window fault, not creator taste, so weigh it lightly when updating taste Priors.",
     "Use the Mind's original rank and reason as context, but let the human verdict override it as taste feedback.",
     "Reply in plain text with 1 to 3 short sentences confirming what you adjusted. No JSON, no Markdown.",
     "",
@@ -50,6 +52,8 @@ function formatClip(clip: TasteFeedbackPromptClip, index: number): string {
     `mindRank=${clip.mindRank ?? "unranked"}`,
     "original Mind reason:",
     truncate(clip.mindRankReason, MAX_REASON_CHARS),
+    "human reject reason:",
+    truncate(clip.rejectReason, MAX_REASON_CHARS),
     "transcript snippet:",
     truncate(clip.transcriptSnippet, MAX_TRANSCRIPT_SNIPPET_CHARS),
   ].join("\n");

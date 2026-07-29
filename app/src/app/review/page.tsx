@@ -66,6 +66,7 @@ function serializeClip(clip: ReviewVideoGroup["clips"][number]): ReviewClipView 
     transcript: clip.transcript,
     mindRank: clip.mindRank,
     mindRankReason: clip.mindRankReason,
+    rejectReason: clip.rejectReason,
     createdAt: clip.createdAt.toISOString(),
   };
 }

@@ -7,8 +7,11 @@ import {
   loadClipPreview,
   loadReviewClip,
   rejectClipForReview,
+  setClipRejectReasonForReview,
   startRenderAfterAccept,
+  RejectReasonStatusError,
 } from "./review";
+import { isRejectReason } from "./reject-reasons";
 import type { renderClip } from "./render";
 import { markPostedForCreator, runSchedulePass } from "./scheduling-repository";
 import type { R2Storage } from "./storage";
@@ -158,6 +161,49 @@ export async function handleRejectClip(
   }
 }
 
+export async function handleSetRejectReason(
+  request: Request,
+  params: RouteParams,
+  options: ReviewApiOptions = {},
+): Promise<Response> {
+  const session = await loadCreatorSession(request, options);
+  if (!session) {
+    return json({ error: "Login required." }, 401);
+  }
+
+  let payload: unknown;
+  try {
+    payload = await request.json();
+  } catch {
+    return json({ error: "Reject reason is required." }, 400);
+  }
+
+  const rejectReason = readRejectReason(payload);
+  if (!rejectReason) {
+    return json({ error: "Pick a valid reject reason." }, 400);
+  }
+
+  try {
+    const clip = await setClipRejectReasonForReview(
+      session.creatorId,
+      await clipId(params),
+      rejectReason,
+      options,
+    );
+    if (!clip) {
+      return json({ error: "Clip not found." }, 404);
+    }
+
+    return json({ clip: serializeClip(clip) }, 200);
+  } catch (error) {
+    if (error instanceof RejectReasonStatusError) {
+      return json({ error: error.message }, 409);
+    }
+
+    throw error;
+  }
+}
+
 export async function handleMarkClipPosted(
   request: Request,
   params: RouteParams,
@@ -230,6 +276,19 @@ function transitionErrorResponse(error: unknown): Response {
   throw error;
 }
 
+function readRejectReason(payload: unknown) {
+  if (
+    typeof payload === "object" &&
+    payload !== null &&
+    "rejectReason" in payload &&
+    isRejectReason(payload.rejectReason)
+  ) {
+    return payload.rejectReason;
+  }
+
+  return null;
+}
+
 function startTasteFeedbackAfterVerdict(
   creatorId: string,
   options: ReviewApiOptions,
@@ -258,6 +317,7 @@ function serializeClip(clip: {
   transcript: string | null;
   mindRank: number | null;
   mindRankReason: string | null;
+  rejectReason: string | null;
   createdAt: Date;
 }) {
   return {
@@ -272,6 +332,7 @@ function serializeClip(clip: {
     transcript: clip.transcript,
     mindRank: clip.mindRank,
     mindRankReason: clip.mindRankReason,
+    rejectReason: clip.rejectReason,
     createdAt: clip.createdAt.toISOString(),
   };
 }

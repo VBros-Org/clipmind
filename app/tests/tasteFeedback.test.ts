@@ -56,6 +56,10 @@ test("syncTasteFeedback batches only unsynced verdict clips and caps the batch a
   );
   assert.equal(mindsClient.calls.length, 1);
   assert.match(mindsClient.calls[0]?.messageText ?? "", /taste-feedback-v1/);
+  assert.match(
+    mindsClient.calls[0]?.messageText ?? "",
+    /bad clip window as a candidate detection or cut-window fault/,
+  );
   assert.match(mindsClient.calls[0]?.messageText ?? "", /accepted transcript 1/);
   assert.match(mindsClient.calls[0]?.messageText ?? "", /rejected transcript 4/);
   assert.doesNotMatch(
@@ -107,6 +111,26 @@ test("syncTasteFeedback marks selected clips only after a successful Mind reply"
     store.clips.map((clip) => clip.feedbackSyncedAt?.toISOString() ?? null),
     [FIXED_NOW.toISOString(), FIXED_NOW.toISOString()],
   );
+});
+
+test("syncTasteFeedback includes optional reject reasons in the Mind message", async () => {
+  const store = new MemoryTasteFeedbackStore({
+    mindId: "mind-1",
+    clips: [
+      memoryClip("rejected-1", "rejected", "flat window", 1, null, "weak moment"),
+    ],
+  });
+  const mindsClient = fakeMindsClient(["Adjusted the weak moment pattern."]);
+
+  await syncTasteFeedback("creator-abc", {
+    store,
+    mindsClient,
+    clock: fixedClock(),
+    logger: quietLogger(),
+  });
+
+  assert.match(mindsClient.calls[0]?.messageText ?? "", /human reject reason:/);
+  assert.match(mindsClient.calls[0]?.messageText ?? "", /weak moment/);
 });
 
 test("syncTasteFeedback leaves clips unsynced when the Mind call fails", async () => {
@@ -308,6 +332,7 @@ function memoryClip(
   transcript: string,
   order: number,
   feedbackSyncedAt: Date | null = null,
+  rejectReason: string | null = null,
 ): MemoryClip {
   return {
     id,
@@ -317,6 +342,7 @@ function memoryClip(
     transcript,
     mindRank: order,
     mindRankReason: `Mind reason ${order}`,
+    rejectReason,
     createdAt: new Date(`2026-07-29T00:${String(order).padStart(2, "0")}:00.000Z`),
     feedbackSyncedAt,
   };

@@ -8,6 +8,7 @@ import { AppShell } from "../AppShell";
 import { requireCreatorSession } from "../app-session";
 
 import { RhythmControls } from "./RhythmControls";
+import { VoiceCard } from "./VoiceCard";
 import styles from "./rhythm.module.css";
 
 const CAPTION_PRESETS = [
@@ -33,6 +34,12 @@ export default async function RhythmPage() {
 
         <RhythmControls
           initialSettings={overview.schedule ?? DEFAULT_SCHEDULE_SETTINGS}
+        />
+
+        <VoiceCard
+          hasMind={overview.creator.hasMind}
+          initialCaptionCorpus={overview.creator.captionCorpus}
+          initialCaptionCount={overview.creator.captionCount}
         />
 
         <section className={styles.accountCard} aria-labelledby="account-title">

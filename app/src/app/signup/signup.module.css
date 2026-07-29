@@ -84,7 +84,26 @@
   outline: none;
 }
 
+.textarea {
+  width: 100%;
+  min-height: calc(var(--cm-touch-target) * 3);
+  resize: vertical;
+  border: var(--cm-border-width) solid var(--cm-border-strong);
+  border-radius: var(--cm-radius-small);
+  background: var(--cm-bg-deep);
+  color: var(--cm-text);
+  font: inherit;
+  line-height: var(--cm-line-body);
+  padding: var(--cm-space-3);
+  outline: none;
+}
+
 .input:focus {
+  border-color: var(--cm-accent);
+  box-shadow: 0 0 0 var(--cm-space-1) var(--cm-focus);
+}
+
+.textarea:focus {
   border-color: var(--cm-accent);
   box-shadow: 0 0 0 var(--cm-space-1) var(--cm-focus);
 }
@@ -217,6 +236,31 @@
 .corpusHeader a {
   flex: 0 0 auto;
   color: var(--cm-accent-strong);
+  font-size: var(--cm-font-secondary);
+  font-weight: 900;
+}
+
+.captionCorpusForm {
+  display: grid;
+  gap: var(--cm-space-3);
+}
+
+.captionCorpusFooter {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--cm-space-3);
+  align-items: center;
+}
+
+.captionCorpusFooter span {
+  color: var(--cm-text-muted);
+  font-size: var(--cm-font-label);
+  font-weight: 900;
+}
+
+.savedNote {
+  margin: 0;
+  color: var(--cm-accent);
   font-size: var(--cm-font-secondary);
   font-weight: 900;
 }

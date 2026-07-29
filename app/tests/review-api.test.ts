@@ -8,6 +8,7 @@ import {
   handleGetClip,
   handleMarkClipPosted,
   handleRejectClip,
+  handleSetRejectReason,
 } from "../lib/review-api";
 
 type ReviewFixture = {
@@ -173,6 +174,62 @@ test("reject transitions candidate to rejected and does not render", async () =>
       },
     });
     assert.equal(clip.status, "rejected");
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("reject reason stores only after a clip is rejected", async () => {
+  const fixture = await createFixture();
+
+  try {
+    const tooEarly = await handleSetRejectReason(
+      jsonRequestWithCode(
+        fixture.clipId,
+        fixture.creatorACode,
+        {
+          rejectReason: "weak moment",
+        },
+        "PATCH",
+      ),
+      { id: fixture.clipId },
+    );
+    assert.equal(tooEarly.status, 409);
+
+    const reject = await handleRejectClip(
+      requestWithCode(fixture.clipId, fixture.creatorACode, "POST"),
+      { id: fixture.clipId },
+    );
+    assert.equal(reject.status, 200);
+
+    const response = await handleSetRejectReason(
+      jsonRequestWithCode(
+        fixture.clipId,
+        fixture.creatorACode,
+        {
+          rejectReason: "weak moment",
+        },
+        "PATCH",
+      ),
+      { id: fixture.clipId },
+    );
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as {
+      clip: {
+        rejectReason: string | null;
+      };
+    };
+    assert.equal(body.clip.rejectReason, "weak moment");
+
+    const clip = await prisma.clip.findUniqueOrThrow({
+      where: {
+        id: fixture.clipId,
+      },
+      select: {
+        rejectReason: true,
+      },
+    });
+    assert.equal(clip.rejectReason, "weak moment");
   } finally {
     await cleanupFixture(fixture);
   }
@@ -387,6 +444,22 @@ function requestWithCode(
     headers: {
       cookie: cookieHeaderForAccessCode(accessCode),
     },
+  });
+}
+
+function jsonRequestWithCode(
+  clipId: string,
+  accessCode: string,
+  payload: unknown,
+  method = "POST",
+): Request {
+  return new Request(`http://localhost/api/clips/${clipId}`, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      cookie: cookieHeaderForAccessCode(accessCode),
+    },
+    body: JSON.stringify(payload),
   });
 }
 

@@ -112,6 +112,13 @@
   width: var(--cm-thumb-strip-width);
   gap: var(--cm-space-2);
   scroll-snap-align: start;
+  align-content: start;
+}
+
+.clipCardButton {
+  display: grid;
+  width: 100%;
+  gap: var(--cm-space-2);
   border: 0;
   background: transparent;
   color: inherit;
@@ -120,8 +127,17 @@
   text-align: left;
 }
 
+.clipCardButton:disabled {
+  cursor: default;
+}
+
 .rejectedCard {
   opacity: 0.48;
+}
+
+.rejectedCard:has(.reasonChips),
+.rejectedCard:has(.rejectUndo) {
+  opacity: 1;
 }
 
 .thumb {
@@ -214,6 +230,99 @@
   color: var(--cm-text-muted);
   padding-inline: var(--cm-space-2);
   text-transform: capitalize;
+}
+
+.rejectUndo {
+  display: grid;
+  gap: var(--cm-space-2);
+  border: var(--cm-border-width) solid var(--cm-amber);
+  border-radius: var(--cm-radius-action);
+  background: color-mix(in srgb, var(--cm-amber) 12%, var(--cm-surface));
+  padding: var(--cm-space-2);
+}
+
+.undoButton {
+  min-height: var(--cm-touch-target);
+  border: 0;
+  border-radius: var(--cm-radius-action);
+  background: var(--cm-amber);
+  color: var(--cm-ink);
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.undoTrack {
+  display: block;
+  height: var(--cm-space-1);
+  overflow: hidden;
+  border-radius: var(--cm-space-1);
+  background: color-mix(in srgb, var(--cm-amber) 22%, var(--cm-bg-deep));
+  transform: translateZ(0);
+}
+
+.undoBar {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--cm-amber);
+  transform-origin: left center;
+  transition: transform 150ms linear;
+}
+
+.reasonChips {
+  display: grid;
+  gap: var(--cm-space-2);
+  border: var(--cm-border-width) solid var(--cm-border-strong);
+  border-radius: var(--cm-radius-action);
+  background: var(--cm-surface-raised);
+  padding: var(--cm-space-2);
+}
+
+.reasonChipHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--cm-space-2);
+  color: var(--cm-text-muted);
+  font-size: var(--cm-font-label);
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.dismissReasonButton {
+  width: var(--cm-space-5);
+  height: var(--cm-space-5);
+  border: var(--cm-border-width) solid var(--cm-border);
+  border-radius: var(--cm-space-5);
+  background: transparent;
+  color: var(--cm-text);
+  cursor: pointer;
+  font-size: var(--cm-font-label);
+  font-weight: 900;
+}
+
+.reasonChipGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cm-space-1);
+}
+
+.reasonChip {
+  min-height: var(--cm-space-6);
+  border: var(--cm-border-width) solid var(--cm-border);
+  border-radius: var(--cm-space-5);
+  background: var(--cm-surface-soft);
+  color: var(--cm-text);
+  cursor: pointer;
+  font-size: var(--cm-font-label);
+  font-weight: 900;
+  padding-inline: var(--cm-space-2);
+}
+
+.reasonChip:disabled {
+  cursor: wait;
+  opacity: 0.6;
 }
 
 .emptyState {

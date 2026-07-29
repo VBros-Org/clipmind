@@ -3,6 +3,12 @@
 import Link from "next/link";
 import { useRef, useState, type FormEvent } from "react";
 
+import {
+  MAX_CAPTION_CORPUS_CHARS,
+  MAX_CAPTION_CORPUS_LINES,
+  capCaptionCorpusInput,
+  countCaptionCorpusLines,
+} from "../../../lib/caption-corpus";
 import { UploadPicker } from "../upload/UploadPicker";
 
 import styles from "./signup.module.css";
@@ -34,6 +40,10 @@ export function SignupFlow() {
   const [displayName, setDisplayName] = useState("");
   const [channelUrl, setChannelUrl] = useState("");
   const [captionPreset, setCaptionPreset] = useState("clean-bold");
+  const [captionCorpus, setCaptionCorpus] = useState("");
+  const [corpusSaveState, setCorpusSaveState] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
   const [accessCode, setAccessCode] = useState("");
   const [error, setError] = useState<SignupError>(null);
   const [busy, setBusy] = useState(false);
@@ -114,6 +124,40 @@ export function SignupFlow() {
     }
 
     await navigator.clipboard?.writeText(accessCode);
+  }
+
+  async function saveCaptionCorpus(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setCorpusSaveState("saving");
+    setError(null);
+
+    try {
+      const response = await fetch("/api/voice/corpus", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          captionCorpus,
+        }),
+      });
+      const body = (await response.json().catch(() => null)) as
+        | {
+            captionCorpus?: string | null;
+            error?: string;
+          }
+        | null;
+
+      if (!response.ok) {
+        throw new Error(body?.error ?? "Captions could not be saved.");
+      }
+
+      setCaptionCorpus(body?.captionCorpus ?? "");
+      setCorpusSaveState("saved");
+    } catch (requestError) {
+      setCorpusSaveState("error");
+      setError(errorMessage(requestError));
+    }
   }
 
   return (
@@ -229,6 +273,35 @@ export function SignupFlow() {
             <h2>Upload a long video so your Mind can learn your voice</h2>
             <Link href="/home">Do this later</Link>
           </div>
+          <form className={styles.captionCorpusForm} onSubmit={saveCaptionCorpus}>
+            <label className={styles.label}>
+              Paste a few recent captions
+              <textarea
+                className={styles.textarea}
+                maxLength={MAX_CAPTION_CORPUS_CHARS}
+                onChange={(event) =>
+                  setCaptionCorpus(capCaptionCorpusInput(event.target.value))
+                }
+                rows={6}
+                value={captionCorpus}
+              />
+            </label>
+            <div className={styles.captionCorpusFooter}>
+              <span>
+                {countCaptionCorpusLines(captionCorpus)}/{MAX_CAPTION_CORPUS_LINES}
+              </span>
+              <button
+                className={styles.secondaryButton}
+                disabled={corpusSaveState === "saving"}
+                type="submit"
+              >
+                {corpusSaveState === "saving" ? "Saving" : "Save captions"}
+              </button>
+            </div>
+            {corpusSaveState === "saved" ? (
+              <p className={styles.savedNote}>Captions saved.</p>
+            ) : null}
+          </form>
           <UploadPicker
             explainer="Your first upload teaches your Mind before ClipMind finds moments and writes captions."
             includeMindSteps

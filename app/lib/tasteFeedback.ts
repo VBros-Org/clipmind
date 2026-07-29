@@ -5,6 +5,7 @@ import {
   createMindsClientFromEnv,
   type MindsClient,
 } from "./minds";
+import { prisma } from "./db";
 import {
   buildTasteFeedbackMessage,
   type TasteFeedbackPromptClip,
@@ -14,10 +15,6 @@ export const MAX_TASTE_FEEDBACK_BATCH = 10;
 export const TASTE_FEEDBACK_TRIGGER_THRESHOLD = 3;
 
 const VERDICT_STATUSES = ["accepted", "rejected", "scheduled", "posted"] as const;
-const importDb = new Function(
-  "specifier",
-  "return import(specifier)",
-) as (specifier: string) => Promise<typeof import("./db")>;
 
 export type TasteFeedbackVerdict = "accepted" | "rejected";
 
@@ -29,6 +26,7 @@ export type TasteFeedbackClip = {
   transcript: string | null;
   mindRank: number | null;
   mindRankReason: string | null;
+  rejectReason: string | null;
   createdAt: Date;
 };
 
@@ -337,6 +335,7 @@ function toPromptClip(clip: TasteFeedbackClip): TasteFeedbackPromptClip {
     durationMs: clip.endMs - clip.startMs,
     mindRank: clip.mindRank,
     mindRankReason: clip.mindRankReason,
+    rejectReason: clip.rejectReason,
   };
 }
 
@@ -347,7 +346,6 @@ async function createPrismaTasteFeedbackStore(
     return new PrismaTasteFeedbackStore(prismaClient);
   }
 
-  const { prisma } = await importDb("./db.js");
   return new PrismaTasteFeedbackStore(prisma);
 }
 
@@ -410,6 +408,7 @@ class PrismaTasteFeedbackStore implements TasteFeedbackStore {
           transcript: true,
           mindRank: true,
           mindRankReason: true,
+          rejectReason: true,
           createdAt: true,
         },
       }),
@@ -427,6 +426,7 @@ class PrismaTasteFeedbackStore implements TasteFeedbackStore {
         transcript: clip.transcript,
         mindRank: clip.mindRank,
         mindRankReason: clip.mindRankReason,
+        rejectReason: clip.rejectReason,
         createdAt: clip.createdAt,
       })),
     };

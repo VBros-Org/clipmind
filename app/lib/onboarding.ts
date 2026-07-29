@@ -1,6 +1,7 @@
 import {
   CORPUS_WEIGHTS,
   type CorpusSourceType,
+  type VoiceDistillEvidence,
   type WeightedTranscript,
 } from "./prompts/voice-distill";
 import type { CorpusItem } from "./clip-service";
@@ -38,7 +39,10 @@ export interface CreatorOnboardingOptions {
   corpusItems: CorpusItem[];
   repository: OnboardingRepository;
   transcribeItem(item: CorpusItem): Promise<Transcript>;
-  distillTenets(transcripts: WeightedTranscript[]): Promise<InitialTenets>;
+  distillTenets(
+    transcripts: WeightedTranscript[],
+    evidence?: VoiceDistillEvidence,
+  ): Promise<InitialTenets>;
   mindsClient: MindsClient | null;
 }
 
@@ -135,9 +139,13 @@ export async function transcribeCorpusItems(
 
 export function distillCorpusTenets(
   transcripts: WeightedTranscript[],
-  distillTenets: (transcripts: WeightedTranscript[]) => Promise<InitialTenets>,
+  distillTenets: (
+    transcripts: WeightedTranscript[],
+    evidence?: VoiceDistillEvidence,
+  ) => Promise<InitialTenets>,
+  evidence: VoiceDistillEvidence = {},
 ): Promise<InitialTenets> {
-  return distillTenets(transcripts);
+  return distillTenets(transcripts, evidence);
 }
 
 export function createCreatorMind(args: {
@@ -158,8 +166,9 @@ export function seedCreatorTenets(
   mindsClient: MindsClient,
   mindId: string,
   tenets: InitialTenets,
-): Promise<void> {
-  return mindsClient.addTenets(mindId, tenets);
+  options: { alias?: string; action?: string } = {},
+): Promise<string> {
+  return mindsClient.addTenets(mindId, tenets, options);
 }
 
 export function verifyCreatorTenets(

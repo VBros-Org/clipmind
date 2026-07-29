@@ -19,6 +19,7 @@ model Creator {
   mindStage         String? // pending | learning_voice | waking_mind | teaching_taste | ready | failed
   mindError         String? // Short named-step Mind onboarding failure message. Never stores stack traces.
   initialTenets     Json? // distilled creator voice + clip-taste Tenets from onboarding
+  captionCorpus     String? // creator-pasted recent post-copy captions, one per line
   captionStyle      Json? // burned-in subtitle preset: font, size, position, colour, highlight
   createdAt         DateTime           @default(now())
   inviteCode        InviteCode?
@@ -79,6 +80,7 @@ model Clip {
   reasons          Json?
   mindRank         Int? // Mind ranking metadata only, 1 = best
   mindRankReason   String?
+  rejectReason     String? // optional creator reason for rejected clips
   status           ClipStatus @default(candidate)
   scheduledFor     DateTime?
   postedAt         DateTime?
