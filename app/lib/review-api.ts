@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 
+import { countPostedThisWeek } from "./posting-stats";
 import { loadCreatorSessionFromCookieHeader } from "./review-auth";
 import {
   acceptClipForReview,
@@ -179,6 +180,13 @@ export async function handleMarkClipPosted(
     if (!result) {
       return json({ error: "Clip not found." }, 404);
     }
+    const postedThisWeek = await countPostedThisWeek(
+      session.creatorId,
+      result.postedAt,
+      {
+        prismaClient: options.prismaClient,
+      },
+    );
 
     return json(
       {
@@ -188,6 +196,7 @@ export async function handleMarkClipPosted(
         videoId: result.videoId,
         scheduledFor: result.scheduledFor?.toISOString() ?? null,
         postedAt: result.postedAt.toISOString(),
+        postedThisWeek,
       },
       200,
     );

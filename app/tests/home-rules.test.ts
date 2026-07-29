@@ -7,6 +7,14 @@ import {
   selectHomeNudges,
   toHomeNudges,
 } from "../lib/nudges";
+import {
+  consumePostedWin,
+  postedWinMessage,
+  startOfUtcWeek,
+  storePostedWin,
+  type PostedWinStorage,
+} from "../lib/posted-win";
+import { selectHomeUploadCards } from "../lib/home-upload-cards";
 
 test("computeRunway divides queued clips by slots per day", () => {
   assert.deepEqual(computeRunway(10, { slotsPerDay: 2 }), {
@@ -17,11 +25,11 @@ test("computeRunway divides queued clips by slots per day", () => {
     tone: "calm",
   });
 
-  assert.deepEqual(computeRunway(7, { slotsPerDay: 2 }), {
+  assert.deepEqual(computeRunway(5, { slotsPerDay: 2 }), {
     kind: "ready",
-    clipCount: 7,
+    clipCount: 5,
     slotsPerDay: 2,
-    days: 3.5,
+    days: 2.5,
     tone: "amber",
   });
 
@@ -32,6 +40,20 @@ test("computeRunway divides queued clips by slots per day", () => {
     days: 0.5,
     tone: "red",
   });
+});
+
+test("computeRunway treats zero runway as refill and keeps 1 to 2 days red", () => {
+  assert.deepEqual(computeRunway(0, { slotsPerDay: 2 }), {
+    kind: "ready",
+    clipCount: 0,
+    slotsPerDay: 2,
+    days: 0,
+    tone: "refill",
+  });
+
+  assert.equal(readyTone(computeRunway(1, { slotsPerDay: 1 })), "red");
+  assert.equal(readyTone(computeRunway(2, { slotsPerDay: 1 })), "red");
+  assert.equal(readyTone(computeRunway(5, { slotsPerDay: 1 })), "calm");
 });
 
 test("computeRunway falls back when schedule is missing or slots are zero", () => {
@@ -137,6 +159,7 @@ test("computeDueNudges projects to the same Home nudge cards", () => {
           status: "scheduled",
         },
       ],
+      failedVideos: [],
     },
     now,
   );
@@ -147,18 +170,21 @@ test("computeDueNudges projects to the same Home nudge cards", () => {
       kind: "review",
       title: "4 clips waiting for review",
       href: "/review",
+      dismissal: "persistent",
     },
     {
       id: "runway:5:2",
       kind: "runway",
       title: "Runway under 2 days. Upload something long.",
       href: "/upload",
+      dismissal: "persistent",
     },
     {
       id: "post:clip-1",
       kind: "post",
       title: "Clip scheduled for 10:00 is ready. Post it now.",
       href: "/home?post=clip-1",
+      dismissal: "persistent",
     },
   ]);
   assert.deepEqual(
@@ -170,3 +196,144 @@ test("computeDueNudges projects to the same Home nudge cards", () => {
     ],
   );
 });
+
+test("computeDueNudges emits failed upload nudges with video dedupe", () => {
+  const due = computeDueNudges(
+    {
+      id: "creator-1",
+      reviewCount: 0,
+      queuedClipCount: 0,
+      schedule: {
+        slotsPerDay: 2,
+        reviewReminders: false,
+        runwayWarnings: false,
+        runwayThresholdDays: 2,
+        postTimeNudges: false,
+        pushNudges: false,
+      },
+      scheduledClips: [],
+      failedVideos: [
+        {
+          id: "video-1",
+          pipelineStage: "failed",
+          pipelineError: "captions: LLM call failed.",
+        },
+        {
+          id: "video-1",
+          pipelineStage: "failed",
+          pipelineError: "captions: LLM call failed.",
+        },
+        {
+          id: "video-2",
+          pipelineStage: "ranking",
+          pipelineError: null,
+        },
+      ],
+    },
+    new Date("2026-07-29T10:05:00.000Z"),
+  );
+
+  assert.equal(due.length, 1);
+  assert.equal(due[0]?.kind, "failed");
+  assert.equal(due[0]?.dedupeKey, "video-1");
+  assert.equal(due[0]?.title, "Upload failed at captions. Tap to retry.");
+  assert.equal(due[0]?.notificationTitle, "Upload failed at captions.");
+  assert.equal(due[0]?.body, "Tap to retry.");
+  assert.deepEqual(toHomeNudges(due), [
+    {
+      id: "failed:video-1",
+      kind: "failed",
+      title: "Upload failed at captions. Tap to retry.",
+      href: "/upload",
+      dismissal: "session",
+    },
+  ]);
+});
+
+test("selectHomeUploadCards keeps active videos and marks failures as danger", () => {
+  assert.deepEqual(
+    selectHomeUploadCards([
+      {
+        id: "video-processing",
+        label: "Today",
+        pipelineStage: "ranking",
+        pipelineError: null,
+      },
+      {
+        id: "video-failed",
+        label: "Yesterday",
+        pipelineStage: "failed",
+        pipelineError: "transcribing: Whisper timed out.",
+      },
+      {
+        id: "video-done",
+        label: "Done",
+        pipelineStage: "done",
+        pipelineError: null,
+      },
+      {
+        id: "video-legacy",
+        label: "Legacy",
+        pipelineStage: null,
+        pipelineError: null,
+      },
+    ]),
+    [
+      {
+        id: "video-processing",
+        label: "Today",
+        variant: "processing",
+        title: "Ranking by your Mind",
+        body: "usually a few minutes",
+        href: "/upload",
+      },
+      {
+        id: "video-failed",
+        label: "Yesterday",
+        variant: "failed",
+        title: "Upload failed at transcribing.",
+        body: "Tap to retry.",
+        href: "/upload",
+      },
+    ],
+  );
+});
+
+test("posted win storage is consumed once for navigation dismissal", () => {
+  const storage = new MemoryStorage();
+  storePostedWin(storage, 1);
+
+  assert.deepEqual(consumePostedWin(storage), {
+    postedThisWeek: 1,
+  });
+  assert.equal(consumePostedWin(storage), null);
+  assert.equal(postedWinMessage(1), "Posted. 1 this week.");
+});
+
+test("startOfUtcWeek returns Monday start", () => {
+  assert.equal(
+    startOfUtcWeek(new Date("2026-07-29T12:00:00.000Z")).toISOString(),
+    "2026-07-27T00:00:00.000Z",
+  );
+});
+
+class MemoryStorage implements PostedWinStorage {
+  private readonly values = new Map<string, string>();
+
+  getItem(key: string): string | null {
+    return this.values.get(key) ?? null;
+  }
+
+  setItem(key: string, value: string): void {
+    this.values.set(key, value);
+  }
+
+  removeItem(key: string): void {
+    this.values.delete(key);
+  }
+}
+
+function readyTone(runway: ReturnType<typeof computeRunway>) {
+  assert.equal(runway.kind, "ready");
+  return runway.tone;
+}

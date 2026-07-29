@@ -1,8 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
+import type { HomeUploadCard } from "../../../lib/home-upload-cards";
+import {
+  POSTED_WIN_EVENT_NAME,
+  storePostedWin,
+  type PostedWinPayload,
+} from "../../../lib/posted-win";
 import {
   canSharePreparedVideoFile,
   sharePreparedVideoFile,
@@ -26,6 +33,7 @@ export type ReadyToPostClipView = {
 
 type ReadyToPostRowProps = {
   clips: ReadyToPostClipView[];
+  uploadCards: HomeUploadCard[];
   initialClipId?: string | null;
 };
 
@@ -35,7 +43,11 @@ const PLATFORMS: { id: Platform; label: string }[] = [
   { id: "instagram", label: "Instagram" },
 ];
 
-export function ReadyToPostRow({ clips, initialClipId }: ReadyToPostRowProps) {
+export function ReadyToPostRow({
+  clips,
+  uploadCards,
+  initialClipId,
+}: ReadyToPostRowProps) {
   const router = useRouter();
   const [activeClipId, setActiveClipId] = useState<string | null>(() =>
     initialClipId && clips.some((clip) => clip.id === initialClipId)
@@ -71,7 +83,17 @@ export function ReadyToPostRow({ clips, initialClipId }: ReadyToPostRowProps) {
     writePostToUrl(null);
   }
 
-  function markLocalPosted(clipId: string) {
+  function markLocalPosted(clipId: string, postedThisWeek: number | null) {
+    if (postedThisWeek !== null) {
+      const detail = { postedThisWeek } satisfies PostedWinPayload;
+      storePostedWin(sessionStorage, postedThisWeek);
+      window.dispatchEvent(
+        new CustomEvent(POSTED_WIN_EVENT_NAME, {
+          detail,
+        }),
+      );
+    }
+
     setPostedClipIds((current) => {
       const next = new Set(current);
       next.add(clipId);
@@ -82,7 +104,7 @@ export function ReadyToPostRow({ clips, initialClipId }: ReadyToPostRowProps) {
     router.refresh();
   }
 
-  if (visibleClips.length === 0) {
+  if (visibleClips.length === 0 && uploadCards.length === 0) {
     return null;
   }
 
@@ -96,6 +118,24 @@ export function ReadyToPostRow({ clips, initialClipId }: ReadyToPostRowProps) {
           </h2>
         </header>
         <div className={styles.readyRow}>
+          {uploadCards.map((card) => (
+            <Link
+              className={`${styles.uploadStateCard} ${
+                card.variant === "failed" ? styles.uploadStateCardFailed : ""
+              }`}
+              data-testid={
+                card.variant === "failed"
+                  ? "home-upload-failed-card"
+                  : "home-upload-processing-card"
+              }
+              href={card.href}
+              key={card.id}
+            >
+              <span className={styles.uploadStateMeta}>{card.label}</span>
+              <span className={styles.uploadStateTitle}>{card.title}</span>
+              <span className={styles.uploadStateBody}>{card.body}</span>
+            </Link>
+          ))}
           {visibleClips.map((clip) => (
             <button
               className={styles.readyBox}
@@ -148,7 +188,7 @@ function PostSheet({
 }: {
   clip: ReadyToPostClipView;
   closeClip: () => void;
-  markLocalPosted: (clipId: string) => void;
+  markLocalPosted: (clipId: string, postedThisWeek: number | null) => void;
 }) {
   const [copyState, setCopyState] = useState<Platform | null>(null);
   const [isPosting, setIsPosting] = useState(false);
@@ -315,16 +355,20 @@ function PostSheet({
       const response = await fetch(`/api/clips/${clip.id}/posted`, {
         method: "POST",
       });
+      const body = (await response.json().catch(() => null)) as {
+        error?: string;
+        postedThisWeek?: number;
+      } | null;
 
       if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          error?: string;
-        } | null;
         setError(body?.error ?? "Post update failed.");
         return;
       }
 
-      markLocalPosted(clip.id);
+      markLocalPosted(
+        clip.id,
+        typeof body?.postedThisWeek === "number" ? body.postedThisWeek : null,
+      );
     } finally {
       setIsPosting(false);
     }

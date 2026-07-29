@@ -2,12 +2,17 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 
 import { prisma } from "./db";
 import {
+  selectHomeUploadCards,
+  type HomeUploadCard,
+} from "./home-upload-cards";
+import {
   computeDueNudges,
   computeRunway,
   toHomeNudges,
   type HomeNudge,
   type RunwayState,
 } from "./nudges";
+import { countPostedThisWeek } from "./posting-stats";
 import { scheduleSettingsFromRow, type ScheduleSettings } from "./schedule-settings";
 import { publicMediaUrlForKey } from "./storage";
 import { formatVideoLabel } from "./video-label";
@@ -30,9 +35,11 @@ export type HomeOverview = {
   reviewCount: number;
   nextUp: NextScheduledClip | null;
   readyToPost: ReadyToPostClip[];
+  uploadCards: HomeUploadCard[];
   nudges: HomeNudge[];
   stats: {
     totalPosted: number;
+    postedThisWeek: number;
     totalClipsMade: number;
   };
 };
@@ -117,8 +124,10 @@ export async function loadHomeOverview(
     reviewCount,
     totalPosted,
     totalClipsMade,
+    postedThisWeek,
     nextScheduledClip,
     readyToPostClips,
+    activeUploadVideos,
   ] = await Promise.all([
     db.schedule.findUnique({
       where: {
@@ -159,6 +168,9 @@ export async function loadHomeOverview(
       where: {
         creatorId,
       },
+    }),
+    countPostedThisWeek(creatorId, now, {
+      prismaClient: db,
     }),
     db.clip.findFirst({
       where: {
@@ -223,6 +235,32 @@ export async function loadHomeOverview(
         },
       },
     }),
+    db.video.findMany({
+      where: {
+        creatorId,
+        pipelineStage: {
+          not: null,
+        },
+        NOT: {
+          pipelineStage: "done",
+        },
+      },
+      orderBy: [
+        {
+          createdAt: "desc",
+        },
+        {
+          id: "asc",
+        },
+      ],
+      take: 10,
+      select: {
+        id: true,
+        pipelineStage: true,
+        pipelineError: true,
+        createdAt: true,
+      },
+    }),
   ]);
 
   const runway = computeRunway(queuedClipCount, schedule);
@@ -233,6 +271,14 @@ export async function loadHomeOverview(
   const readyToPost = readyToPostClips
     .filter((clip) => clip.scheduledFor)
     .map(toReadyToPostClip);
+  const uploadCards = selectHomeUploadCards(
+    activeUploadVideos.map((video) => ({
+      id: video.id,
+      label: formatVideoLabel(video.createdAt),
+      pipelineStage: video.pipelineStage,
+      pipelineError: video.pipelineError,
+    })),
+  );
   const nudges = toHomeNudges(
     computeDueNudges(
       {
@@ -245,6 +291,11 @@ export async function loadHomeOverview(
           scheduledFor: new Date(clip.scheduledForIso),
           status: "scheduled",
         })),
+        failedVideos: activeUploadVideos.map((video) => ({
+          id: video.id,
+          pipelineStage: video.pipelineStage,
+          pipelineError: video.pipelineError,
+        })),
       },
       now,
     ),
@@ -255,9 +306,11 @@ export async function loadHomeOverview(
     reviewCount,
     nextUp,
     readyToPost,
+    uploadCards,
     nudges,
     stats: {
       totalPosted,
+      postedThisWeek,
       totalClipsMade,
     },
   };

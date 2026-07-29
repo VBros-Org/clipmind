@@ -232,6 +232,7 @@ test("posted API only transitions scheduled clips for the owning creator", async
       })).videoId,
       scheduledFor: "2026-07-28T11:00:00.000Z",
       postedAt: "2026-07-28T12:00:00.000Z",
+      postedThisWeek: 1,
     });
 
     const postedClip = await prisma.clip.findUniqueOrThrow({

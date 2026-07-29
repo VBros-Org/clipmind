@@ -15,6 +15,11 @@ import {
   type UploadView,
 } from "../../../lib/upload-status-client";
 import {
+  failedStageFromPipelineError,
+  failedUploadStageLabel,
+  uploadStageLabel,
+} from "../../../lib/upload-stage-copy";
+import {
   createScreenWakeLockManager,
   type ScreenWakeLockManager,
 } from "../../../lib/screen-wake-lock";
@@ -555,13 +560,13 @@ function RecentUploads({
             </p>
             {upload.pipelineStage === "failed" ? (
               <p className={styles.failureText}>
-                Failed at {failedStageLabel(upload.pipelineError)}.
+                Failed at {failedUploadStageLabel(upload.pipelineError)}.
               </p>
             ) : null}
           </div>
           <div className={styles.uploadActions}>
             <span className={styles.statusChip}>
-              {stageLabel(upload.pipelineStage)}
+              {uploadStageLabel(upload.pipelineStage)}
             </span>
             {upload.pipelineStage === "failed" ? (
               <button
@@ -663,7 +668,8 @@ function checklistState(
   currentStage: string,
   error: string | null,
 ): "complete" | "active" | "pending" | "failed" {
-  const failedStage = currentStage === "failed" ? failedStageFromError(error) : null;
+  const failedStage =
+    currentStage === "failed" ? failedStageFromPipelineError(error) : null;
   if (failedStage) {
     if (stepId === failedStage) {
       return "failed";
@@ -709,60 +715,9 @@ function failedStepLine(error: string | null): string {
   return message || "This step failed.";
 }
 
-function failedStageLabel(error: string | null): string {
-  return stageLabel(failedStageFromError(error) ?? "transcribing");
-}
-
-function failedStageFromError(error: string | null): PipelineStage | null {
-  const prefix = error?.split(":", 1)[0]?.trim() ?? null;
-  return isKnownStage(prefix) ? prefix : null;
-}
-
 function errorMessageFromPipeline(error: string | null): string | null {
   const message = error?.includes(":") ? error.slice(error.indexOf(":") + 1) : error;
   return message?.trim() || null;
-}
-
-function stageLabel(stage: string): string {
-  switch (stage) {
-    case "uploaded":
-      return "uploaded";
-    case "learning_voice":
-      return "learning voice";
-    case "waking_mind":
-      return "waking Mind";
-    case "teaching_taste":
-      return "teaching taste";
-    case "transcribing":
-      return "transcribing";
-    case "candidates":
-      return "finding moments";
-    case "ranking":
-      return "ranking";
-    case "captions":
-      return "captions";
-    case "done":
-      return "done";
-    case "failed":
-      return "failed";
-    default:
-      return stage;
-  }
-}
-
-function isKnownStage(value: string | null): value is PipelineStage {
-  return (
-    value === "uploaded" ||
-    value === "learning_voice" ||
-    value === "waking_mind" ||
-    value === "teaching_taste" ||
-    value === "transcribing" ||
-    value === "candidates" ||
-    value === "ranking" ||
-    value === "captions" ||
-    value === "done" ||
-    value === "failed"
-  );
 }
 
 function readXhrJson(request: XMLHttpRequest): { error?: string } | UploadResponse {
