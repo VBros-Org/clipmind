@@ -5,6 +5,7 @@ import { Buffer } from "node:buffer";
 import { prisma } from "../lib/db";
 import { cookieHeaderForAccessCode } from "../lib/review-auth";
 import {
+  handleGetRecentUploads,
   handleGetVideoStatus,
   handleRetryVideo,
   handleUploadVideo,
@@ -144,12 +145,54 @@ test("status endpoint requires auth and creator scoping", async () => {
       { id: video.id },
     );
     assert.equal(ownVideo.status, 200);
+    assert.equal(ownVideo.headers.get("cache-control"), "no-store");
     assert.deepEqual(await ownVideo.json(), {
       stage: "captions",
       error: null,
       failedStage: null,
       clipCount: 2,
     });
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("recent uploads endpoint is creator scoped and no-store", async () => {
+  const fixture = await createFixture();
+
+  try {
+    const video = await createVideo(fixture, {
+      pipelineStage: "failed",
+      pipelineError: "transcribing: Whisper timeout",
+      clipCount: 0,
+    });
+    fixture.videoId = video.id;
+
+    const noCookie = await handleGetRecentUploads(
+      new Request("http://localhost/api/videos/recent"),
+    );
+    assert.equal(noCookie.status, 401);
+    assert.equal(noCookie.headers.get("cache-control"), "no-store");
+
+    const response = await handleGetRecentUploads(
+      requestForPath("/api/videos/recent", fixture.creatorACode),
+    );
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+
+    const body = (await response.json()) as {
+      uploads: Array<{
+        id: string;
+        pipelineStage: string;
+        pipelineError: string | null;
+        clipCount: number;
+      }>;
+    };
+    assert.equal(body.uploads.length, 1);
+    assert.equal(body.uploads[0]?.id, video.id);
+    assert.equal(body.uploads[0]?.pipelineStage, "failed");
+    assert.equal(body.uploads[0]?.pipelineError, "transcribing: Whisper timeout");
+    assert.equal(body.uploads[0]?.clipCount, 0);
   } finally {
     await cleanupFixture(fixture);
   }
@@ -196,6 +239,7 @@ test("retry endpoint is creator scoped and starts a failed-stage retry in the ba
     );
 
     assert.equal(response.status, 202);
+    assert.equal(response.headers.get("cache-control"), "no-store");
     assert.deepEqual(await response.json(), {
       videoId: video.id,
       retrying: true,
@@ -365,7 +409,15 @@ function requestWithCode(
   accessCode: string,
   method = "GET",
 ): Request {
-  return new Request(`http://localhost/api/videos/${videoId}/status`, {
+  return requestForPath(`/api/videos/${videoId}/status`, accessCode, method);
+}
+
+function requestForPath(
+  path: string,
+  accessCode: string,
+  method = "GET",
+): Request {
+  return new Request(`http://localhost${path}`, {
     method,
     headers: {
       cookie: cookieHeaderForAccessCode(accessCode),

@@ -1,3 +1,5 @@
+import { unstable_noStore as noStore } from "next/cache";
+
 import { loadAppFrameData, loadUploadOverview } from "../../../lib/app-overview";
 import { AppShell } from "../AppShell";
 import { requireCreatorSession } from "../app-session";
@@ -5,7 +7,12 @@ import { requireCreatorSession } from "../app-session";
 import { UploadPicker } from "./UploadPicker";
 import styles from "./upload.module.css";
 
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
+
 export default async function UploadPage() {
+  noStore();
+
   const session = await requireCreatorSession();
   const [frame, uploadOverview] = await Promise.all([
     loadAppFrameData(session.creatorId),

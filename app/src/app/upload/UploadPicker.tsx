@@ -2,31 +2,17 @@
 
 import Link from "next/link";
 import type { ChangeEvent } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import {
+  fetchRecentUploads,
+  fetchVideoStatus,
+  retryUploadAndRefreshStatus,
+  type PipelineStage,
+  type StatusResponse,
+  type UploadView,
+} from "../../../lib/upload-status-client";
 import styles from "./upload.module.css";
-
-type PipelineStage =
-  | "learning_voice"
-  | "waking_mind"
-  | "teaching_taste"
-  | "uploaded"
-  | "transcribing"
-  | "candidates"
-  | "ranking"
-  | "captions"
-  | "done"
-  | "failed";
-
-export type UploadView = {
-  id: string;
-  label: string;
-  status: string;
-  pipelineStage: string;
-  pipelineError: string | null;
-  createdAtIso: string;
-  clipCount: number;
-};
 
 type UploadProgress = {
   fileName: string;
@@ -39,13 +25,6 @@ type UploadResponse = {
   videoId: string;
   stage: PipelineStage;
   bytes: number;
-};
-
-type StatusResponse = {
-  stage: PipelineStage;
-  error: string | null;
-  failedStage: PipelineStage | null;
-  clipCount: number;
 };
 
 const CLIENT_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
@@ -136,19 +115,67 @@ export function UploadPicker({
         : null,
     [activeVideoId, uploads],
   );
+  const activeStage = activeUpload?.pipelineStage ?? null;
+
+  const applyFreshUploads = useCallback((freshUploads: UploadView[]) => {
+    setUploads(freshUploads);
+    setActiveVideoId((currentId) => {
+      const current = currentId
+        ? freshUploads.find((upload) => upload.id === currentId) ?? null
+        : null;
+      if (current) {
+        return current.id;
+      }
+
+      return (
+        freshUploads.find((upload) => isProcessing(upload.pipelineStage))?.id ??
+        null
+      );
+    });
+  }, []);
 
   function openPicker() {
     inputRef.current?.click();
   }
 
   useEffect(() => {
-    if (!activeVideoId) {
+    let cancelled = false;
+
+    async function refreshRecentUploads() {
+      const freshUploads = await fetchRecentUploads();
+      if (!cancelled && freshUploads) {
+        applyFreshUploads(freshUploads);
+      }
+    }
+
+    function handleFocus() {
+      void refreshRecentUploads();
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        void refreshRecentUploads();
+      }
+    }
+
+    void refreshRecentUploads();
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [applyFreshUploads]);
+
+  useEffect(() => {
+    if (!activeVideoId || !activeStage || !isProcessing(activeStage)) {
       return;
     }
 
     const pollingVideoId = activeVideoId;
     let cancelled = false;
-    let interval: number | null = null;
 
     async function pollStatus() {
       const status = await fetchVideoStatus(pollingVideoId);
@@ -157,23 +184,16 @@ export function UploadPicker({
       }
 
       setUploads((current) => mergeStatus(current, pollingVideoId, status));
-      if (status.stage === "done" || status.stage === "failed") {
-        if (interval !== null) {
-          window.clearInterval(interval);
-        }
-      }
     }
 
     void pollStatus();
-    interval = window.setInterval(pollStatus, POLL_MS);
+    const interval = window.setInterval(pollStatus, POLL_MS);
 
     return () => {
       cancelled = true;
-      if (interval !== null) {
-        window.clearInterval(interval);
-      }
+      window.clearInterval(interval);
     };
-  }, [activeVideoId]);
+  }, [activeVideoId, activeStage]);
 
   async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0] ?? null;
@@ -226,20 +246,23 @@ export function UploadPicker({
   async function retryUpload(videoId: string) {
     setUploadError(null);
 
-    const response = await fetch(`/api/videos/${videoId}/retry`, {
-      method: "POST",
-      cache: "no-store",
-    });
-    const body = (await response.json().catch(() => null)) as
-      | { stage?: PipelineStage; error?: string }
-      | null;
-
-    if (!response.ok) {
-      setUploadError(body?.error ?? "Retry failed.");
+    const result = await retryUploadAndRefreshStatus(videoId);
+    if (result.outcome === "refetched") {
+      setUploads((current) => mergeStatus(current, videoId, result.status));
+      setActiveVideoId(videoId);
       return;
     }
 
-    const stage = body?.stage ?? "transcribing";
+    if (result.outcome === "error") {
+      const currentStatus = result.status;
+      if (currentStatus) {
+        setUploads((current) => mergeStatus(current, videoId, currentStatus));
+      }
+      setUploadError(result.message);
+      return;
+    }
+
+    const stage = result.stage;
     setUploads((current) =>
       current.map((upload) =>
         upload.id === videoId
@@ -467,18 +490,6 @@ function uploadFile(
 
     request.send(form);
   });
-}
-
-async function fetchVideoStatus(videoId: string): Promise<StatusResponse | null> {
-  const response = await fetch(`/api/videos/${videoId}/status`, {
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    return null;
-  }
-
-  return (await response.json()) as StatusResponse;
 }
 
 function mergeStatus(
