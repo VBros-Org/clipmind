@@ -61,6 +61,8 @@ test("service worker is versioned and keeps media out of cache handling", async 
   assert.match(serviceWorker, /function networkFirst/);
   assert.match(serviceWorker, /function cacheFirst/);
   assert.match(serviceWorker, /function isMediaRequest/);
+  assert.match(serviceWorker, /firebase-messaging-sw\.js/);
+  assert.match(serviceWorker, /notificationclick/);
   assert.match(serviceWorker, /\/home/);
   assert.match(serviceWorker, /\/review/);
 });

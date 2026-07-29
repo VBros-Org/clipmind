@@ -2,11 +2,12 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 
 import { prisma } from "./db";
 import {
+  computeDueNudges,
   computeRunway,
-  selectHomeNudges,
+  toHomeNudges,
   type HomeNudge,
   type RunwayState,
-} from "./home-rules";
+} from "./nudges";
 import { scheduleSettingsFromRow, type ScheduleSettings } from "./schedule-settings";
 import { publicMediaUrlForKey } from "./storage";
 import { formatVideoLabel } from "./video-label";
@@ -18,7 +19,7 @@ import {
   isMindOnboardingStage,
 } from "./video-onboarding";
 
-export type { HomeNudge, RunwayState } from "./home-rules";
+export type { HomeNudge, RunwayState } from "./nudges";
 
 export type AppFrameData = {
   reviewCount: number;
@@ -130,6 +131,7 @@ export async function loadHomeOverview(
         runwayWarnings: true,
         runwayThresholdDays: true,
         postTimeNudges: true,
+        pushNudges: true,
       },
     }),
     db.clip.count({
@@ -231,29 +233,22 @@ export async function loadHomeOverview(
   const readyToPost = readyToPostClips
     .filter((clip) => clip.scheduledFor)
     .map(toReadyToPostClip);
-  const dueReadyClip = readyToPost.find((clip) => {
-    const scheduledFor = new Date(clip.scheduledForIso);
-    return (
-      !Number.isNaN(scheduledFor.getTime()) &&
-      scheduledFor.getTime() <= now.getTime()
-    );
-  });
-  const nudges = selectHomeNudges({
-    reviewCount,
-    runway,
-    dueClip:
-      dueReadyClip
-        ? {
-            clipId: dueReadyClip.id,
-            timeLabel: formatHourMinute(new Date(dueReadyClip.scheduledForIso)),
-            isDue: true,
-          }
-        : null,
-    reviewReminders: scheduleSettings?.reviewReminders,
-    runwayWarnings: scheduleSettings?.runwayWarnings,
-    runwayWarningThresholdDays: scheduleSettings?.runwayThresholdDays,
-    postTimeNudges: scheduleSettings?.postTimeNudges,
-  });
+  const nudges = toHomeNudges(
+    computeDueNudges(
+      {
+        id: creatorId,
+        reviewCount,
+        queuedClipCount,
+        schedule: scheduleSettings,
+        scheduledClips: readyToPost.map((clip) => ({
+          id: clip.id,
+          scheduledFor: new Date(clip.scheduledForIso),
+          status: "scheduled",
+        })),
+      },
+      now,
+    ),
+  );
 
   return {
     runway,
@@ -365,6 +360,7 @@ export async function loadRhythmOverview(
           runwayWarnings: true,
           runwayThresholdDays: true,
           postTimeNudges: true,
+          pushNudges: true,
         },
       },
     },
@@ -457,14 +453,6 @@ function captionPresetFromStyle(value: Prisma.JsonValue): string {
   }
 
   return value.preset;
-}
-
-function formatHourMinute(date: Date): string {
-  return new Intl.DateTimeFormat("en", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date);
 }
 
 function displayPipelineStage(

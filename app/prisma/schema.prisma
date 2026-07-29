@@ -11,30 +11,32 @@ datasource db {
 }
 
 model Creator {
-  id            String    @id @default(cuid())
-  accessCode    String?   @unique
-  displayName   String?
-  channelUrl    String?
-  mindId        String? // the creator's Minds agent (voice + clip-taste Tenets)
-  mindStage     String? // pending | learning_voice | waking_mind | teaching_taste | ready | failed
-  mindError     String? // Short named-step Mind onboarding failure message. Never stores stack traces.
-  initialTenets Json? // distilled creator voice + clip-taste Tenets from onboarding
-  captionStyle  Json? // burned-in subtitle preset: font, size, position, colour, highlight
-  createdAt     DateTime  @default(now())
-  inviteCode    InviteCode?
-  videos        Video[]
-  clips         Clip[]
-  schedule      Schedule?
+  id                String             @id @default(cuid())
+  accessCode        String?            @unique
+  displayName       String?
+  channelUrl        String?
+  mindId            String? // the creator's Minds agent (voice + clip-taste Tenets)
+  mindStage         String? // pending | learning_voice | waking_mind | teaching_taste | ready | failed
+  mindError         String? // Short named-step Mind onboarding failure message. Never stores stack traces.
+  initialTenets     Json? // distilled creator voice + clip-taste Tenets from onboarding
+  captionStyle      Json? // burned-in subtitle preset: font, size, position, colour, highlight
+  createdAt         DateTime           @default(now())
+  inviteCode        InviteCode?
+  videos            Video[]
+  clips             Clip[]
+  schedule          Schedule?
+  pushSubscriptions PushSubscription[]
+  nudgeLogs         NudgeLog[]
 }
 
 model InviteCode {
-  id              String   @id @default(cuid())
-  code            String   @unique
+  id              String    @id @default(cuid())
+  code            String    @unique
   note            String?
-  usedByCreatorId String?  @unique
-  usedByCreator   Creator? @relation(fields: [usedByCreatorId], references: [id])
+  usedByCreatorId String?   @unique
+  usedByCreator   Creator?  @relation(fields: [usedByCreatorId], references: [id])
   usedAt          DateTime?
-  createdAt       DateTime @default(now())
+  createdAt       DateTime  @default(now())
 }
 
 model Video {
@@ -85,19 +87,20 @@ model Clip {
 }
 
 model Schedule {
-  id                   String    @id @default(cuid())
-  creatorId            String    @unique
-  creator              Creator   @relation(fields: [creatorId], references: [id])
-  slots                Json // post times
-  rotation             Json // deterministic rotation state (least-recently-served)
-  slotsPerDay          Int       @default(1)
-  anchorHour           Int       @default(9)
-  reviewReminders      Boolean   @default(true)
-  runwayWarnings       Boolean   @default(true)
-  runwayThresholdDays  Int       @default(2)
-  postTimeNudges       Boolean   @default(true)
-  lastScheduledAt      DateTime?
-  updatedAt            DateTime  @updatedAt
+  id                  String    @id @default(cuid())
+  creatorId           String    @unique
+  creator             Creator   @relation(fields: [creatorId], references: [id])
+  slots               Json // post times
+  rotation            Json // deterministic rotation state (least-recently-served)
+  slotsPerDay         Int       @default(1)
+  anchorHour          Int       @default(9)
+  reviewReminders     Boolean   @default(true)
+  runwayWarnings      Boolean   @default(true)
+  runwayThresholdDays Int       @default(2)
+  postTimeNudges      Boolean   @default(true)
+  pushNudges          Boolean   @default(false)
+  lastScheduledAt     DateTime?
+  updatedAt           DateTime  @updatedAt
 }
 
 model LearningEvent {
@@ -106,4 +109,28 @@ model LearningEvent {
   creatorId String
   action    String // accept | reject (feeds the Mind's taste)
   createdAt DateTime @default(now())
+}
+
+model PushSubscription {
+  id         String    @id @default(cuid())
+  creatorId  String
+  creator    Creator   @relation(fields: [creatorId], references: [id])
+  token      String    @unique
+  userAgent  String?
+  createdAt  DateTime  @default(now())
+  lastSeenAt DateTime  @default(now())
+  disabledAt DateTime?
+
+  @@index([creatorId, disabledAt])
+}
+
+model NudgeLog {
+  creatorId String
+  creator   Creator  @relation(fields: [creatorId], references: [id])
+  kind      String
+  dedupeKey String
+  sentAt    DateTime @default(now())
+
+  @@id([creatorId, kind, dedupeKey])
+  @@index([sentAt])
 }

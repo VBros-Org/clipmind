@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -15,6 +15,10 @@ import {
 } from "../../../lib/schedule-settings";
 
 import styles from "./rhythm.module.css";
+import {
+  hasGrantedPushPermission,
+  subscribeToPushNudges,
+} from "./push-client";
 
 type RhythmControlsProps = {
   initialSettings: ScheduleSettings;
@@ -28,6 +32,33 @@ export function RhythmControls({ initialSettings }: RhythmControlsProps) {
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const saveToken = useRef(0);
   const clearTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!settings.pushNudges || !hasGrantedPushPermission()) {
+      return;
+    }
+
+    let active = true;
+    const syncToken = () => {
+      if (!active) {
+        return;
+      }
+
+      void subscribeToPushNudges({ requestPermission: false }).catch((error) => {
+        console.error("Push subscription refresh failed", error);
+      });
+    };
+
+    syncToken();
+    window.addEventListener("focus", syncToken);
+    navigator.serviceWorker?.addEventListener("controllerchange", syncToken);
+
+    return () => {
+      active = false;
+      window.removeEventListener("focus", syncToken);
+      navigator.serviceWorker?.removeEventListener("controllerchange", syncToken);
+    };
+  }, [settings.pushNudges]);
 
   function updateSettings(update: (current: ScheduleSettings) => ScheduleSettings) {
     const previous = settings;
@@ -68,7 +99,7 @@ export function RhythmControls({ initialSettings }: RhythmControlsProps) {
           setSaveState("idle");
         }
       }, 1800);
-    } catch {
+    } catch (error) {
       if (saveToken.current !== token) {
         return;
       }
@@ -82,6 +113,25 @@ export function RhythmControls({ initialSettings }: RhythmControlsProps) {
     if (clearTimer.current !== null) {
       window.clearTimeout(clearTimer.current);
       clearTimer.current = null;
+    }
+  }
+
+  async function updatePushNudges(pushNudges: boolean) {
+    if (!pushNudges) {
+      updateSettings((current) => ({ ...current, pushNudges }));
+      return;
+    }
+
+    clearSavedTimer();
+    setSaveState("saving");
+
+    try {
+      await subscribeToPushNudges({ requestPermission: true });
+      updateSettings((current) => ({ ...current, pushNudges: true }));
+    } catch (error) {
+      console.error("Push subscription failed", error);
+      setSettings((current) => ({ ...current, pushNudges: false }));
+      setSaveState("error");
     }
   }
 
@@ -174,6 +224,14 @@ export function RhythmControls({ initialSettings }: RhythmControlsProps) {
             updateSettings((current) => ({ ...current, postTimeNudges }))
           }
         />
+        <ToggleRow
+          checked={settings.pushNudges}
+          disabled={saveState === "saving"}
+          label="Push nudges"
+          onChange={(pushNudges) => {
+            void updatePushNudges(pushNudges);
+          }}
+        />
       </section>
     </>
   );
@@ -221,10 +279,12 @@ function Stepper({
 
 function ToggleRow({
   checked,
+  disabled = false,
   label,
   onChange,
 }: {
   checked: boolean;
+  disabled?: boolean;
   label: string;
   onChange: (checked: boolean) => void;
 }) {
@@ -233,6 +293,7 @@ function ToggleRow({
       <span>{label}</span>
       <input
         checked={checked}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.checked)}
         type="checkbox"
       />

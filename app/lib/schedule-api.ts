@@ -112,6 +112,7 @@ const scheduleSettingsSelect = {
   runwayWarnings: true,
   runwayThresholdDays: true,
   postTimeNudges: true,
+  pushNudges: true,
 } as const;
 
 function json(payload: unknown, status: number): Response {
