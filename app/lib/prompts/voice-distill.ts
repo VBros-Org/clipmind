@@ -15,6 +15,10 @@ export interface WeightedTranscript {
   transcript: Transcript;
 }
 
+export interface VoiceDistillEvidence {
+  captionCorpus?: string | null;
+}
+
 export interface ChatMessage {
   role: "system" | "user";
   content: string;
@@ -22,8 +26,10 @@ export interface ChatMessage {
 
 export function buildVoiceDistillMessages(
   transcripts: WeightedTranscript[],
+  evidence: VoiceDistillEvidence = {},
 ): ChatMessage[] {
-  if (transcripts.length === 0) {
+  const captionCorpus = cleanCaptionCorpus(evidence.captionCorpus);
+  if (transcripts.length === 0 && !captionCorpus) {
     throw new Error("At least one transcript is required for voice distillation.");
   }
 
@@ -31,27 +37,41 @@ export function buildVoiceDistillMessages(
     .sort((left, right) => right.weight - left.weight)
     .map((item, index) => formatCorpusItem(item, index + 1))
     .join("\n\n");
+  const systemLines = [
+    "You distil a creator-specific ClipMind Tenet set from video transcripts.",
+    "Tenets may contain only this creator's voice, phrasing, hooks, vocabulary, clip taste, and creator-specific guardrails.",
+    "Do not include product workflow rules, posting rules, scheduling, deduplication, ranking method instructions, SEO rules, or backend control logic.",
+    "Existing posted clips are highest signal because the creator already chose those moments.",
+  ];
+  const userLines = [
+    `Prompt version: ${INITIAL_TENETS_VERSION}`,
+    "Build this exact JSON shape:",
+    JSON.stringify(expectedShape(), null, 2),
+    "Corpus items are sorted by weight, highest first. Weight 3 means creator-approved existing clip. Weight 1 means source video or long-form sample.",
+  ];
+
+  if (captionCorpus) {
+    systemLines.push(
+      "Written post-copy captions are primary evidence for caption voice: hooks, slang, rhythm, punctuation, and line shape.",
+      "Video transcripts remain primary evidence for spoken voice, creator taste, and which moments feel clippable.",
+    );
+    userLines.push(
+      "Caption corpus, one recent post-copy caption per line:",
+      formatCaptionCorpus(captionCorpus),
+    );
+  }
+
+  userLines.push(corpus || "Transcript corpus: (none provided)");
+  systemLines.push("Return valid JSON only.");
 
   return [
     {
       role: "system",
-      content: [
-        "You distil a creator-specific ClipMind Tenet set from video transcripts.",
-        "Tenets may contain only this creator's voice, phrasing, hooks, vocabulary, clip taste, and creator-specific guardrails.",
-        "Do not include product workflow rules, posting rules, scheduling, deduplication, ranking method instructions, SEO rules, or backend control logic.",
-        "Existing posted clips are highest signal because the creator already chose those moments.",
-        "Return valid JSON only.",
-      ].join("\n"),
+      content: systemLines.join("\n"),
     },
     {
       role: "user",
-      content: [
-        `Prompt version: ${INITIAL_TENETS_VERSION}`,
-        "Build this exact JSON shape:",
-        JSON.stringify(expectedShape(), null, 2),
-        "Corpus items are sorted by weight, highest first. Weight 3 means creator-approved existing clip. Weight 1 means source video or long-form sample.",
-        corpus,
-      ].join("\n\n"),
+      content: userLines.join("\n\n"),
     },
   ];
 }
@@ -76,6 +96,18 @@ function formatCorpusItem(item: WeightedTranscript, index: number): string {
     "segments:",
     segments || "(no segments)",
   ].join("\n");
+}
+
+function formatCaptionCorpus(captionCorpus: string): string {
+  return captionCorpus
+    .split("\n")
+    .map((caption, index) => `Caption ${index + 1}: ${caption}`)
+    .join("\n");
+}
+
+function cleanCaptionCorpus(value: string | null | undefined): string | null {
+  const clean = value?.trim();
+  return clean ? clean : null;
 }
 
 function expectedShape() {

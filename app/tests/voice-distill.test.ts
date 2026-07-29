@@ -53,14 +53,61 @@ test("voice distill prompt gives existing clips highest weight", () => {
   assert.match(userPrompt, /type: existing_clip\nweight: 3/);
 });
 
+test("voice distill prompt adds pasted captions as primary caption voice evidence", () => {
+  const messages = buildVoiceDistillMessages(
+    [
+      {
+        source: "source.mp4",
+        sourceType: "source_video",
+        weight: 1,
+        transcript: transcript("Spoken source text."),
+      },
+    ],
+    {
+      captionCorpus:
+        "bro the copper hoe actually saved me\narcs be killing bro, rip",
+    },
+  );
+
+  assert.match(
+    messages[0]?.content ?? "",
+    /Written post-copy captions are primary evidence for caption voice/,
+  );
+  assert.match(
+    messages[0]?.content ?? "",
+    /Video transcripts remain primary evidence for spoken voice/,
+  );
+  assert.match(messages[1]?.content ?? "", /Caption 1: bro the copper hoe/);
+  assert.match(messages[1]?.content ?? "", /Caption 2: arcs be killing bro/);
+});
+
+test("voice distill prompt is unchanged when captions are absent", () => {
+  const input = [
+    {
+      source: "clip.mp4",
+      sourceType: "existing_clip" as const,
+      weight: 3,
+      transcript: transcript("Wait, this is the moment."),
+    },
+  ];
+
+  assert.deepEqual(
+    buildVoiceDistillMessages(input),
+    buildVoiceDistillMessages(input, {
+      captionCorpus: "",
+    }),
+  );
+});
+
 test("OpenAI distillation validates the Tenet JSON shape", async () => {
   const tenets = await distillTenetsWithOpenAI({
     client: fakeOpenAI(JSON.stringify(validTenets)),
-    model: "test-model",
-    generatedAt: validTenets.generatedAt,
-    transcripts: [
-      {
-        source: "clip.mp4",
+        model: "test-model",
+        generatedAt: validTenets.generatedAt,
+        captionCorpus: "have you ever seen a run saved at zero seconds",
+        transcripts: [
+          {
+            source: "clip.mp4",
         sourceType: "existing_clip",
         weight: 3,
         transcript: transcript("Wait, this is the moment."),

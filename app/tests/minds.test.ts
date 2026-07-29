@@ -103,9 +103,10 @@ test("addTenets seeds via one client-lib message and verifyTenets uses a second 
   );
   assert.ok(client);
 
-  await client.addTenets("mind_abc-123", tenets);
+  const seedReply = await client.addTenets("mind_abc-123", tenets);
   const reply = await client.verifyTenets("mind_abc-123");
 
+  assert.equal(seedReply, "Stored dry reaction style.");
   assert.equal(
     reply,
     "Current Tenets include dry reaction style and fast payoff clips.",

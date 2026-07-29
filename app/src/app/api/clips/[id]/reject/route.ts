@@ -1,4 +1,7 @@
-import { handleRejectClip } from "../../../../../../lib/review-api";
+import {
+  handleRejectClip,
+  handleSetRejectReason,
+} from "../../../../../../lib/review-api";
 
 type ClipRouteContext = {
   params: Promise<{
@@ -8,4 +11,8 @@ type ClipRouteContext = {
 
 export function POST(request: Request, context: ClipRouteContext) {
   return handleRejectClip(request, context.params);
+}
+
+export function PATCH(request: Request, context: ClipRouteContext) {
+  return handleSetRejectReason(request, context.params);
 }

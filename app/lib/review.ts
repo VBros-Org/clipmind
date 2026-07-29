@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 
 import { prisma } from "./db";
+import { isRejectReason, type RejectReason } from "./reject-reasons";
 import { renderClip } from "./render";
 import {
   assertClipStatusTransition,
@@ -42,6 +43,7 @@ export type ReviewClip = {
   transcript: string | null;
   mindRank: number | null;
   mindRankReason: string | null;
+  rejectReason: string | null;
   createdAt: Date;
 };
 
@@ -169,6 +171,7 @@ export async function loadReviewVideo(
           transcript: true,
           mindRank: true,
           mindRankReason: true,
+          rejectReason: true,
           createdAt: true,
         },
       },
@@ -277,6 +280,7 @@ export async function loadReviewClip(
       transcript: true,
       mindRank: true,
       mindRankReason: true,
+      rejectReason: true,
       createdAt: true,
     },
   });
@@ -430,6 +434,7 @@ export async function rejectClipForReview(
       },
       data: {
         status: "rejected",
+        rejectReason: null,
       },
     });
 
@@ -442,6 +447,57 @@ export async function rejectClipForReview(
         clipId: clip.id,
         creatorId,
         action: "reject",
+      },
+    });
+
+    const updated = await tx.clip.findUniqueOrThrow({
+      where: {
+        id: clip.id,
+      },
+      select: reviewClipSelect,
+    });
+
+    return toReviewClip(updated);
+  });
+}
+
+export async function setClipRejectReasonForReview(
+  creatorId: string,
+  clipId: string,
+  rejectReason: RejectReason,
+  options: ReviewRepositoryOptions = {},
+): Promise<ReviewClip | null> {
+  if (!isRejectReason(rejectReason)) {
+    throw new Error(`Invalid reject reason: ${rejectReason}`);
+  }
+
+  const db = options.prismaClient ?? prisma;
+
+  return db.$transaction(async (tx) => {
+    const clip = await tx.clip.findFirst({
+      where: {
+        id: clipId,
+        creatorId,
+      },
+      select: {
+        id: true,
+        status: true,
+      },
+    });
+
+    if (!clip) {
+      return null;
+    }
+    if (toClipSchedulingStatus(clip.status) !== "rejected") {
+      throw new RejectReasonStatusError(clip.id, clip.status);
+    }
+
+    await tx.clip.update({
+      where: {
+        id: clip.id,
+      },
+      data: {
+        rejectReason,
       },
     });
 
@@ -491,6 +547,7 @@ const reviewClipSelect = {
   transcript: true,
   mindRank: true,
   mindRankReason: true,
+  rejectReason: true,
   createdAt: true,
 } satisfies Prisma.ClipSelect;
 
@@ -506,6 +563,7 @@ function toReviewClip(clip: {
   transcript: string | null;
   mindRank: number | null;
   mindRankReason: string | null;
+  rejectReason: string | null;
   createdAt: Date;
 }): ReviewClip {
   return {
@@ -520,6 +578,7 @@ function toReviewClip(clip: {
     transcript: clip.transcript,
     mindRank: clip.mindRank,
     mindRankReason: clip.mindRankReason,
+    rejectReason: clip.rejectReason,
     createdAt: clip.createdAt,
   };
 }
@@ -587,6 +646,7 @@ function toReviewVideoGroup(video: {
     transcript: string | null;
     mindRank: number | null;
     mindRankReason: string | null;
+    rejectReason: string | null;
     createdAt: Date;
   }>;
 }): ReviewVideoGroup {
@@ -617,6 +677,12 @@ function emptyStatusCounts(): Record<ClipSchedulingStatus, number> {
 
 function isRecord(value: Prisma.JsonValue): value is Record<string, Prisma.JsonValue> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export class RejectReasonStatusError extends Error {
+  constructor(clipId: string, status: string) {
+    super(`Clip ${clipId} is ${status}, so it cannot store a reject reason.`);
+  }
 }
 
 function errorMessage(error: unknown): string {

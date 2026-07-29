@@ -180,6 +180,7 @@ function recordingMindsClient(
     },
     async addTenets(_mindId: string, value: InitialTenets) {
       state.addedTenets = value;
+      return "Stored onboarding Tenets.";
     },
     async verifyTenets(value: string) {
       state.verifiedMindId = value;
