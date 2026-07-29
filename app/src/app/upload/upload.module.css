@@ -350,7 +350,8 @@
   gap: var(--cm-space-2);
 }
 
-.retryButton {
+.retryButton,
+.removeButton {
   min-height: var(--cm-touch-target);
   border: var(--cm-border-width) solid var(--cm-border-strong);
   border-radius: var(--cm-radius-action);
@@ -362,6 +363,12 @@
   padding-inline: var(--cm-space-3);
 }
 
-.retryButton:active {
+.removeButton {
+  background: transparent;
+  color: var(--cm-text-soft);
+}
+
+.retryButton:active,
+.removeButton:active {
   transform: translateY(1px);
 }

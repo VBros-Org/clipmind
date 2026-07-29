@@ -49,6 +49,8 @@ export interface R2Storage {
   presignSourceUrl(key: string, ttlSeconds?: number): Promise<string>;
   uploadRender(clipId: string, stream: StorageUploadBody): Promise<string>;
   uploadThumbnail(clipId: string, stream: StorageUploadBody): Promise<string>;
+  deleteSource(key: string): Promise<void>;
+  deleteMediaObject(key: string): Promise<void>;
   probeBuckets(): Promise<StorageProbeResult[]>;
 }
 
@@ -113,6 +115,14 @@ export function createR2Storage(options: R2StorageOptions = {}): R2Storage {
       return key;
     },
 
+    async deleteSource(key) {
+      await deleteObject(s3Client, storageEnv.R2_SOURCES_BUCKET, key);
+    },
+
+    async deleteMediaObject(key) {
+      await deleteObject(s3Client, storageEnv.R2_MEDIA_BUCKET, key);
+    },
+
     async probeBuckets() {
       const targets: StorageProbeTarget[] = [
         { bucket: storageEnv.R2_SOURCES_BUCKET, label: "sources" },
@@ -170,6 +180,20 @@ export function uploadThumbnail(
   return createR2Storage(options).uploadThumbnail(clipId, stream);
 }
 
+export function deleteSourceObject(
+  key: string,
+  options?: R2StorageOptions,
+): Promise<void> {
+  return createR2Storage(options).deleteSource(key);
+}
+
+export function deleteMediaObject(
+  key: string,
+  options?: R2StorageOptions,
+): Promise<void> {
+  return createR2Storage(options).deleteMediaObject(key);
+}
+
 export function sourceKeyForVideo(videoId: string): string {
   return `videos/${videoId}/source.mp4`;
 }
@@ -195,6 +219,29 @@ export function publicMediaUrlForKey(
   return publicUrlForKey(cleanBase, cleanKey);
 }
 
+export function publicMediaKeyFromUrl(
+  url: string | null | undefined,
+  baseUrl = process.env.R2_MEDIA_PUBLIC_BASE,
+): string | null {
+  const cleanUrl = url?.trim();
+  const cleanBase = baseUrl?.trim().replace(/\/+$/, "");
+  if (!cleanUrl || !cleanBase) {
+    return null;
+  }
+
+  const basePrefix = `${cleanBase}/`;
+  if (!cleanUrl.startsWith(basePrefix)) {
+    return null;
+  }
+
+  const key = cleanUrl
+    .slice(basePrefix.length)
+    .split(/[?#]/, 1)[0]
+    ?.replace(/^\/+/, "");
+
+  return key || null;
+}
+
 function createR2Client(storageEnv: StorageEnv): S3Client {
   return new S3Client({
     region: "auto",
@@ -218,6 +265,25 @@ async function putObject(
   input: PutObjectCommandInput,
 ): Promise<void> {
   await s3Client.send(new PutObjectCommand(input));
+}
+
+async function deleteObject(
+  s3Client: S3ClientLike,
+  bucket: string,
+  key: string,
+): Promise<void> {
+  try {
+    await s3Client.send(
+      new DeleteObjectCommand({
+        Bucket: bucket,
+        Key: key,
+      }),
+    );
+  } catch (error) {
+    if (!isMissingObjectError(error)) {
+      throw error;
+    }
+  }
 }
 
 async function defaultSourcePresigner(
@@ -281,5 +347,28 @@ function bucketProbeError(target: StorageProbeTarget, error: unknown): Error {
     {
       cause,
     },
+  );
+}
+
+function isMissingObjectError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const candidate = error as {
+    name?: unknown;
+    Code?: unknown;
+    code?: unknown;
+    $metadata?: {
+      httpStatusCode?: unknown;
+    };
+  };
+  const status = candidate.$metadata?.httpStatusCode;
+  if (status === 404) {
+    return true;
+  }
+
+  return [candidate.name, candidate.Code, candidate.code].some(
+    (value) => value === "NoSuchKey" || value === "NotFound",
   );
 }

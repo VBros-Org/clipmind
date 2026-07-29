@@ -2,7 +2,13 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
+import { deleteVideo } from "../../../lib/video-delete-client";
+import {
+  VideoDeleteSheet,
+  type VideoDeleteTarget,
+} from "../VideoDeleteSheet";
 import styles from "./review.module.css";
 
 type Platform = "youtube" | "tiktok" | "instagram";
@@ -58,8 +64,12 @@ const PLATFORMS: { id: Platform; label: string }[] = [
 ];
 
 export function ReviewBoard({ groups: initialGroups, initialClipId }: ReviewBoardProps) {
+  const router = useRouter();
   const [groups, setGroups] = useState(initialGroups);
   const [activeClipId, setActiveClipId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<VideoDeleteTarget | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const didReadInitialClip = useRef(false);
   const clipCount = groups.reduce((total, group) => total + group.clips.length, 0);
 
@@ -109,6 +119,42 @@ export function ReviewBoard({ groups: initialGroups, initialClipId }: ReviewBoar
     );
   }
 
+  function openDeleteSheet(group: ReviewVideoGroupView) {
+    setDeleteTarget({
+      id: group.id,
+      title: group.title,
+      clipCount: group.totalClips,
+    });
+    setDeleteError(null);
+  }
+
+  async function confirmDeleteVideo() {
+    if (!deleteTarget) {
+      return;
+    }
+
+    const target = deleteTarget;
+    setIsDeleting(true);
+    setDeleteError(null);
+
+    try {
+      const result = await deleteVideo(target.id);
+      if (result.outcome !== "deleted") {
+        setDeleteError(result.message);
+        return;
+      }
+
+      if (activeClipId && findClip(groups, activeClipId)?.videoId === target.id) {
+        closeClip();
+      }
+      setGroups((current) => current.filter((group) => group.id !== target.id));
+      setDeleteTarget(null);
+      router.refresh();
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
   if (clipCount === 0) {
     return (
       <section className={styles.emptyState}>
@@ -126,13 +172,24 @@ export function ReviewBoard({ groups: initialGroups, initialClipId }: ReviewBoar
         {groups.map((group) => (
           <section className={styles.videoGroup} key={group.id}>
             <header className={styles.groupHeader}>
-              <div>
+              <div className={styles.groupHeading}>
                 <p className={styles.groupLabel}>{group.status}</p>
                 <h2 className={styles.groupTitle}>{group.title}</h2>
               </div>
-              <span className={styles.groupCount}>
-                {group.totalClips} {group.totalClips === 1 ? "clip" : "clips"}
-              </span>
+              <div className={styles.groupActions}>
+                <span className={styles.groupCount}>
+                  {group.totalClips} {group.totalClips === 1 ? "clip" : "clips"}
+                </span>
+                <button
+                  aria-label={`Remove ${group.title}`}
+                  className={styles.groupRemoveButton}
+                  data-testid="remove-review-video-button"
+                  onClick={() => openDeleteSheet(group)}
+                  type="button"
+                >
+                  Remove
+                </button>
+              </div>
             </header>
             <div className={styles.clipStrip}>
               {group.clips.map((clip) => (
@@ -148,6 +205,20 @@ export function ReviewBoard({ groups: initialGroups, initialClipId }: ReviewBoar
           clip={activeClip}
           closeClip={closeClip}
           updateClip={updateClip}
+        />
+      ) : null}
+
+      {deleteTarget ? (
+        <VideoDeleteSheet
+          error={deleteError}
+          isDeleting={isDeleting}
+          onCancel={() => {
+            if (!isDeleting) {
+              setDeleteTarget(null);
+            }
+          }}
+          onConfirm={confirmDeleteVideo}
+          target={deleteTarget}
         />
       ) : null}
     </>

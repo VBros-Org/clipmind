@@ -1,0 +1,97 @@
+.backdrop {
+  position: fixed;
+  z-index: 70;
+  inset: 0;
+  display: grid;
+  align-items: end;
+  background: rgba(0, 0, 0, 0.62);
+  padding: var(--cm-page-gutter);
+  padding-block-start: calc(var(--cm-safe-top) + var(--cm-space-5));
+  padding-block-end: calc(var(--cm-space-4) + env(safe-area-inset-bottom));
+}
+
+.sheet {
+  display: grid;
+  width: min(100%, var(--cm-modal-width));
+  gap: var(--cm-stack-gap);
+  margin: 0 auto;
+  border: var(--cm-border-width) solid var(--cm-red);
+  border-radius: var(--cm-radius-card);
+  background: var(--cm-surface-raised);
+  box-shadow: var(--cm-shadow-soft);
+  padding: var(--cm-card-padding);
+}
+
+.copy {
+  display: grid;
+  gap: var(--cm-space-2);
+}
+
+.label {
+  margin: 0;
+  color: var(--cm-red-soft);
+  font-size: var(--cm-font-label);
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.title {
+  margin: 0;
+  color: var(--cm-text);
+  font-size: var(--cm-font-section);
+  line-height: var(--cm-line-numeral);
+  overflow-wrap: anywhere;
+}
+
+.message,
+.error {
+  margin: 0;
+  font-size: var(--cm-font-secondary);
+  line-height: var(--cm-line-body);
+}
+
+.message {
+  color: var(--cm-text-soft);
+}
+
+.error {
+  border: var(--cm-border-width) solid color-mix(in srgb, var(--cm-red) 55%, transparent);
+  border-radius: var(--cm-radius-action);
+  background: color-mix(in srgb, var(--cm-red) 12%, var(--cm-surface));
+  color: var(--cm-red-soft);
+  font-weight: 850;
+  padding: var(--cm-space-3);
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--cm-space-3);
+}
+
+.cancelButton,
+.confirmButton {
+  min-height: var(--cm-action-height);
+  border-radius: var(--cm-radius-action);
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.cancelButton {
+  border: var(--cm-border-width) solid var(--cm-border-strong);
+  background: transparent;
+  color: var(--cm-text);
+}
+
+.confirmButton {
+  border: var(--cm-border-width) solid var(--cm-red);
+  background: color-mix(in srgb, var(--cm-red) 16%, var(--cm-surface-raised));
+  color: var(--cm-red-soft);
+}
+
+.cancelButton:disabled,
+.confirmButton:disabled {
+  cursor: wait;
+  opacity: 0.64;
+}

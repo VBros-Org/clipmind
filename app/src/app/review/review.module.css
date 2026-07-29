@@ -47,7 +47,7 @@
 .groupHeader {
   display: flex;
   gap: var(--cm-space-3);
-  align-items: end;
+  align-items: start;
   justify-content: space-between;
 }
 
@@ -63,11 +63,38 @@
   -webkit-line-clamp: 2;
 }
 
+.groupHeading {
+  min-width: 0;
+}
+
 .groupCount {
   flex: 0 0 auto;
   color: var(--cm-text-muted);
   font-size: var(--cm-font-secondary);
   font-weight: 800;
+}
+
+.groupActions {
+  display: grid;
+  flex: 0 0 auto;
+  gap: var(--cm-space-2);
+  justify-items: end;
+}
+
+.groupRemoveButton {
+  min-height: var(--cm-touch-target);
+  border: var(--cm-border-width) solid var(--cm-border-strong);
+  border-radius: var(--cm-radius-action);
+  background: transparent;
+  color: var(--cm-text-soft);
+  cursor: pointer;
+  font-size: var(--cm-font-secondary);
+  font-weight: 900;
+  padding-inline: var(--cm-space-3);
+}
+
+.groupRemoveButton:active {
+  transform: translateY(1px);
 }
 
 .clipStrip {
