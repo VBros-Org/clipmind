@@ -42,6 +42,22 @@ test("computeRunway divides queued clips by slots per day", () => {
   });
 });
 
+test("computeRunway uses explicit slotTimes length when present", () => {
+  assert.deepEqual(
+    computeRunway(6, {
+      slotsPerDay: 1,
+      slotTimes: ["09:15", "13:30", "19:45"],
+    }),
+    {
+      kind: "ready",
+      clipCount: 6,
+      slotsPerDay: 3,
+      days: 2,
+      tone: "red",
+    },
+  );
+});
+
 test("computeRunway treats zero runway as refill and keeps 1 to 2 days red", () => {
   assert.deepEqual(computeRunway(0, { slotsPerDay: 2 }), {
     kind: "ready",

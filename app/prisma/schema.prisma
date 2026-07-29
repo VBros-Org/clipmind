@@ -93,6 +93,7 @@ model Schedule {
   creatorId           String    @unique
   creator             Creator   @relation(fields: [creatorId], references: [id])
   slots               Json // post times
+  slotTimes           Json? // explicit post times: sorted HH:MM quarter-hour strings
   rotation            Json // deterministic rotation state (least-recently-served)
   slotsPerDay         Int       @default(1)
   anchorHour          Int       @default(9)

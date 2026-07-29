@@ -1,4 +1,7 @@
-import { DEFAULT_RUNWAY_THRESHOLD_DAYS } from "./schedule-settings";
+import {
+  DEFAULT_RUNWAY_THRESHOLD_DAYS,
+  slotCountForSchedule,
+} from "./schedule-settings";
 import {
   failedUploadNudgeTitle,
   failedUploadTitle,
@@ -26,6 +29,7 @@ export type RunwayState =
 
 export type NudgeSchedule = {
   slotsPerDay: number;
+  slotTimes?: readonly string[] | null;
   reviewReminders: boolean;
   runwayWarnings: boolean;
   runwayThresholdDays: number;
@@ -137,7 +141,13 @@ type NudgeData = {
 
 export function computeRunway(
   clipCount: number,
-  schedule: { slotsPerDay: number } | null | undefined,
+  schedule:
+    | {
+        slotsPerDay: number;
+        slotTimes?: readonly string[] | null;
+      }
+    | null
+    | undefined,
 ): RunwayState {
   if (!schedule) {
     return {
@@ -147,7 +157,8 @@ export function computeRunway(
     };
   }
 
-  if (!Number.isFinite(schedule.slotsPerDay) || schedule.slotsPerDay <= 0) {
+  const slotsPerDay = slotCountForSchedule(schedule);
+  if (!slotsPerDay || !Number.isFinite(slotsPerDay) || slotsPerDay <= 0) {
     return {
       kind: "needs_schedule",
       clipCount,
@@ -155,11 +166,11 @@ export function computeRunway(
     };
   }
 
-  const days = clipCount / schedule.slotsPerDay;
+  const days = clipCount / slotsPerDay;
   return {
     kind: "ready",
     clipCount,
-    slotsPerDay: schedule.slotsPerDay,
+    slotsPerDay,
     days,
     tone: runwayTone(days),
   };

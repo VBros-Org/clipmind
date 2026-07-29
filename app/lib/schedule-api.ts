@@ -1,4 +1,4 @@
-import type { PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 
 import { prisma } from "./db";
 import { loadCreatorSessionFromCookieHeader } from "./review-auth";
@@ -66,6 +66,7 @@ export async function handlePutSchedule(
   }
 
   const db = options.prismaClient ?? prisma;
+  const settingsData = scheduleSettingsWriteData(settings);
   const schedule = await db.schedule.upsert({
     where: {
       creatorId: session.creatorId,
@@ -74,11 +75,11 @@ export async function handlePutSchedule(
       creatorId: session.creatorId,
       slots: buildSlotLabels(settings),
       rotation: {},
-      ...settings,
+      ...settingsData,
     },
     update: {
       slots: buildSlotLabels(settings),
-      ...settings,
+      ...settingsData,
     },
     select: scheduleSettingsSelect,
   });
@@ -108,12 +109,26 @@ async function loadCreatorSession(
 const scheduleSettingsSelect = {
   slotsPerDay: true,
   anchorHour: true,
+  slotTimes: true,
   reviewReminders: true,
   runwayWarnings: true,
   runwayThresholdDays: true,
   postTimeNudges: true,
   pushNudges: true,
 } as const;
+
+function scheduleSettingsWriteData(settings: ScheduleSettings) {
+  return {
+    slotsPerDay: settings.slotsPerDay,
+    anchorHour: settings.anchorHour,
+    slotTimes: settings.slotTimes ?? Prisma.DbNull,
+    reviewReminders: settings.reviewReminders,
+    runwayWarnings: settings.runwayWarnings,
+    runwayThresholdDays: settings.runwayThresholdDays,
+    postTimeNudges: settings.postTimeNudges,
+    pushNudges: settings.pushNudges,
+  };
+}
 
 function json(payload: unknown, status: number): Response {
   return Response.json(payload, {

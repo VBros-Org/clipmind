@@ -4,6 +4,8 @@ import {
   MAX_SLOTS_PER_DAY,
   MIN_ANCHOR_HOUR,
   MIN_SLOTS_PER_DAY,
+  normalizeSlotTimes,
+  slotTimeParts,
 } from "./schedule-settings";
 
 export const SCHEDULE_ANCHOR_HOUR_UTC = DEFAULT_ANCHOR_HOUR;
@@ -41,6 +43,7 @@ export interface SchedulingHistoryClip {
 export interface SchedulingCadence {
   slotsPerDay: number;
   anchorHour?: number | null;
+  slotTimes?: unknown;
   lastScheduledAt?: Date | null;
 }
 
@@ -149,21 +152,25 @@ export function pickNextClip(
   return nextVideoClips[0] ?? null;
 }
 
-// Cadence is UTC and intentionally simple for T6:
-// slotsPerDay creates evenly spaced slots from the creator's anchor hour.
 export function computeNextSlot(
   schedule: SchedulingCadence,
   now: Date,
 ): Date {
   assertValidDate(now, "now");
-  validateSlotsPerDay(schedule.slotsPerDay);
-  const anchorHour = schedule.anchorHour ?? DEFAULT_ANCHOR_HOUR;
-  validateAnchorHour(anchorHour);
 
   const lastScheduledAt = schedule.lastScheduledAt ?? null;
   if (lastScheduledAt) {
     assertValidDate(lastScheduledAt, "lastScheduledAt");
   }
+
+  const slotTimes = normalizeSlotTimes(schedule.slotTimes);
+  if (slotTimes) {
+    return computeNextExplicitSlot(slotTimes, now, lastScheduledAt);
+  }
+
+  validateSlotsPerDay(schedule.slotsPerDay);
+  const anchorHour = schedule.anchorHour ?? DEFAULT_ANCHOR_HOUR;
+  validateAnchorHour(anchorHour);
 
   const intervalMs = DAY_MS / schedule.slotsPerDay;
   if (!Number.isInteger(intervalMs)) {
@@ -177,6 +184,38 @@ export function computeNextSlot(
   const slotsSinceAnchor = Math.ceil((cursorMs - anchorMs) / intervalMs);
 
   return new Date(anchorMs + slotsSinceAnchor * intervalMs);
+}
+
+function computeNextExplicitSlot(
+  slotTimes: readonly string[],
+  now: Date,
+  lastScheduledAt: Date | null,
+): Date {
+  const cursorMs = lastScheduledAt
+    ? Math.max(now.getTime(), lastScheduledAt.getTime() + 1)
+    : now.getTime();
+  const cursor = new Date(cursorMs);
+  const year = cursor.getUTCFullYear();
+  const month = cursor.getUTCMonth();
+  const day = cursor.getUTCDate();
+
+  for (const slotTime of slotTimes) {
+    const { hour, minute } = slotTimeParts(slotTime);
+    const slot = new Date(Date.UTC(year, month, day, hour, minute));
+    if (slot.getTime() >= cursorMs) {
+      return slot;
+    }
+  }
+
+  const firstSlotTime = slotTimes[0];
+  if (!firstSlotTime) {
+    throw new Error("slotTimes must contain at least one time.");
+  }
+
+  const firstSlot = slotTimeParts(firstSlotTime);
+  return new Date(
+    Date.UTC(year, month, day + 1, firstSlot.hour, firstSlot.minute),
+  );
 }
 
 function compareAcceptedAge(

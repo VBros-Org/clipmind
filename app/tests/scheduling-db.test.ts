@@ -52,7 +52,8 @@ async function main() {
     await prisma.schedule.create({
       data: {
         creatorId: creator.id,
-        slots: [],
+        slots: ["03:00", "09:15", "15:30", "21:45"],
+        slotTimes: ["03:00", "09:15", "15:30", "21:45"],
         rotation: {},
         slotsPerDay: 4,
       },
@@ -118,9 +119,9 @@ async function main() {
     assert.deepEqual(
       scheduled.map((result) => result.scheduledFor.toISOString()),
       [
-        "2026-07-27T09:00:00.000Z",
-        "2026-07-27T15:00:00.000Z",
-        "2026-07-27T21:00:00.000Z",
+        "2026-07-27T09:15:00.000Z",
+        "2026-07-27T15:30:00.000Z",
+        "2026-07-27T21:45:00.000Z",
         "2026-07-28T03:00:00.000Z",
       ],
     );
@@ -209,7 +210,7 @@ async function main() {
     );
     assert.deepEqual(
       passClips.map((clip) => clip.scheduledFor?.toISOString()),
-      ["2026-07-28T09:00:00.000Z", "2026-07-28T15:00:00.000Z"],
+      ["2026-07-28T09:15:00.000Z", "2026-07-28T15:30:00.000Z"],
     );
 
     console.log(

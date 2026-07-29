@@ -16,6 +16,7 @@ type ScheduleFixture = {
 const validSettings: ScheduleSettings = {
   slotsPerDay: 2,
   anchorHour: 9,
+  slotTimes: ["09:15", "19:45"],
   reviewReminders: true,
   runwayWarnings: true,
   runwayThresholdDays: 3,
@@ -41,6 +42,15 @@ test("schedule API requires auth and validates settings ranges", async () => {
       { ...validSettings, runwayThresholdDays: 8 },
       { ...validSettings, reviewReminders: "yes" },
       { ...validSettings, pushNudges: "yes" },
+      { ...validSettings, slotTimes: [] },
+      { ...validSettings, slotTimes: ["09:10", "19:45"] },
+      { ...validSettings, slotTimes: ["09:15", "09:15"] },
+      { ...validSettings, slotTimes: ["19:45", "09:15"] },
+      { ...validSettings, slotTimes: ["9:15", "19:45"] },
+      {
+        ...validSettings,
+        slotTimes: ["00:00", "06:00", "12:00", "18:00", "23:45"],
+      },
     ];
 
     for (const payload of invalidCases) {
@@ -77,6 +87,20 @@ test("schedule API persists rhythm per creator and does not leak across creators
     assert.deepEqual(putBody.schedule, validSettings);
     assert.equal(putBody.scheduledCount, 0);
 
+    const storedSchedule = await prisma.schedule.findUniqueOrThrow({
+      where: {
+        creatorId: fixture.creatorAId,
+      },
+      select: {
+        slots: true,
+        slotTimes: true,
+        slotsPerDay: true,
+      },
+    });
+    assert.deepEqual(storedSchedule.slots, validSettings.slotTimes);
+    assert.deepEqual(storedSchedule.slotTimes, validSettings.slotTimes);
+    assert.equal(storedSchedule.slotsPerDay, validSettings.slotTimes?.length);
+
     const creatorAGet = await handleGetSchedule(
       requestWithCode(fixture.creatorACode),
     );
@@ -94,6 +118,48 @@ test("schedule API persists rhythm per creator and does not leak across creators
       schedule: ScheduleSettings | null;
     };
     assert.equal(creatorBBody.schedule, null);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("schedule API keeps legacy cadence payloads working when slotTimes is omitted", async () => {
+  const fixture = await createFixture();
+
+  try {
+    const legacyPayload = {
+      slotsPerDay: 2,
+      anchorHour: 9,
+      reviewReminders: true,
+      runwayWarnings: true,
+      runwayThresholdDays: 3,
+      postTimeNudges: false,
+      pushNudges: false,
+    };
+    const response = await handlePutSchedule(
+      requestWithCode(fixture.creatorACode, "PUT", legacyPayload),
+    );
+    assert.equal(response.status, 200);
+
+    const body = (await response.json()) as {
+      schedule: ScheduleSettings;
+    };
+    assert.deepEqual(body.schedule, {
+      ...legacyPayload,
+      slotTimes: null,
+    });
+
+    const storedSchedule = await prisma.schedule.findUniqueOrThrow({
+      where: {
+        creatorId: fixture.creatorAId,
+      },
+      select: {
+        slots: true,
+        slotTimes: true,
+      },
+    });
+    assert.deepEqual(storedSchedule.slots, ["09:00", "21:00"]);
+    assert.equal(storedSchedule.slotTimes, null);
   } finally {
     await cleanupFixture(fixture);
   }

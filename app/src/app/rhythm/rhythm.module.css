@@ -168,6 +168,108 @@
   font-weight: 900;
 }
 
+.slotList {
+  display: grid;
+  gap: var(--cm-space-2);
+}
+
+.slotItem {
+  display: grid;
+  gap: var(--cm-space-2);
+}
+
+.slotRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--cm-touch-target);
+  gap: var(--cm-space-2);
+  align-items: stretch;
+}
+
+.slotButton,
+.removeSlotButton,
+.addSlotButton {
+  min-height: var(--cm-touch-target);
+  border: var(--cm-border-width) solid var(--cm-border);
+  border-radius: var(--cm-radius-action);
+  color: var(--cm-text);
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.slotButton {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--cm-space-3);
+  background: var(--cm-surface-soft);
+  padding-inline: var(--cm-space-3);
+}
+
+.slotButton span {
+  color: var(--cm-text-soft);
+  font-size: var(--cm-font-secondary);
+}
+
+.slotButton strong {
+  font-size: var(--cm-font-section);
+  line-height: var(--cm-line-numeral);
+}
+
+.removeSlotButton {
+  background: transparent;
+  font-size: var(--cm-font-section);
+}
+
+.removeSlotButton:disabled,
+.addSlotButton:disabled {
+  color: var(--cm-text-faint);
+  cursor: not-allowed;
+  opacity: 0.64;
+}
+
+.timePicker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--cm-space-2);
+  border: var(--cm-border-width) solid var(--cm-border);
+  border-radius: var(--cm-radius-action);
+  background: var(--cm-bg-deep);
+  padding: var(--cm-space-2);
+}
+
+.pickerLabel {
+  display: grid;
+  gap: var(--cm-space-1);
+  color: var(--cm-text-muted);
+  font-size: var(--cm-font-label);
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.pickerLabel select {
+  width: 100%;
+  min-height: var(--cm-touch-target);
+  border: var(--cm-border-width) solid var(--cm-border-strong);
+  border-radius: var(--cm-radius-small);
+  background: var(--cm-surface);
+  color: var(--cm-text);
+  font: inherit;
+  font-weight: 900;
+  outline: none;
+  padding-inline: var(--cm-space-3);
+}
+
+.pickerLabel select:focus {
+  border-color: var(--cm-accent);
+  box-shadow: 0 0 0 var(--cm-space-1) var(--cm-focus);
+}
+
+.addSlotButton {
+  width: 100%;
+  background: var(--cm-accent);
+  color: var(--cm-ink);
+}
+
 .stepper {
   display: inline-grid;
   grid-template-columns: var(--cm-touch-target) minmax(4.5rem, auto) var(--cm-touch-target);
