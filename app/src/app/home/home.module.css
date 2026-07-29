@@ -6,6 +6,7 @@
 .runwayHero {
   display: grid;
   min-height: calc(var(--cm-space-6) * 6);
+  gap: var(--cm-space-3);
   align-content: center;
   justify-items: center;
   border: var(--cm-border-width) solid var(--cm-border);
@@ -13,6 +14,12 @@
   background: var(--cm-surface);
   padding: var(--cm-card-padding);
   text-align: center;
+}
+
+.runwayHeroLink {
+  color: inherit;
+  cursor: pointer;
+  text-decoration: none;
 }
 
 .calm {
@@ -25,6 +32,12 @@
 
 .red {
   color: var(--cm-red);
+}
+
+.refill {
+  border-color: color-mix(in srgb, var(--cm-amber) 58%, var(--cm-border));
+  background: color-mix(in srgb, var(--cm-surface) 88%, var(--cm-amber));
+  color: var(--cm-amber);
 }
 
 .runwayNumber {
@@ -42,6 +55,19 @@
   font-weight: 800;
 }
 
+.runwayAction {
+  display: inline-flex;
+  width: 100%;
+  min-height: var(--cm-action-height);
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--cm-radius-action);
+  background: var(--cm-amber);
+  color: var(--cm-ink);
+  font-size: var(--cm-font-body);
+  font-weight: 900;
+}
+
 .runwayLink {
   min-height: var(--cm-touch-target);
   color: var(--cm-accent-strong);
@@ -49,6 +75,19 @@
   align-items: center;
   font-size: var(--cm-font-secondary);
   font-weight: 800;
+}
+
+.postedWin {
+  margin: 0;
+  border: var(--cm-border-width) solid var(--cm-border-strong);
+  border-radius: var(--cm-radius-action);
+  background: var(--cm-surface-raised);
+  color: var(--cm-text);
+  font-size: var(--cm-font-body);
+  font-weight: 900;
+  line-height: var(--cm-line-body);
+  white-space: nowrap;
+  padding: var(--cm-space-3) var(--cm-card-padding);
 }
 
 .nextUp {
@@ -163,6 +202,52 @@
   scroll-snap-type: x proximity;
 }
 
+.uploadStateCard {
+  display: grid;
+  flex: 0 0 min(10rem, calc(100vw - (var(--cm-page-gutter) * 2)));
+  width: min(10rem, calc(100vw - (var(--cm-page-gutter) * 2)));
+  min-height: var(--cm-thumb-strip-height);
+  align-content: start;
+  gap: var(--cm-space-2);
+  scroll-snap-align: start;
+  border: var(--cm-border-width) solid var(--cm-border);
+  border-radius: var(--cm-radius-card);
+  background: var(--cm-surface-raised);
+  color: var(--cm-text);
+  padding: var(--cm-space-3);
+  text-decoration: none;
+}
+
+.uploadStateCardFailed {
+  border-color: color-mix(in srgb, var(--cm-red) 68%, var(--cm-border));
+  background: color-mix(in srgb, var(--cm-surface-raised) 88%, var(--cm-red));
+}
+
+.uploadStateMeta,
+.uploadStateBody {
+  color: var(--cm-text-muted);
+  font-size: var(--cm-font-label);
+  font-weight: 800;
+  line-height: var(--cm-line-body);
+  overflow-wrap: anywhere;
+}
+
+.uploadStateTitle {
+  color: var(--cm-text);
+  font-size: var(--cm-font-body);
+  font-weight: 900;
+  line-height: var(--cm-line-body);
+  overflow-wrap: anywhere;
+}
+
+.uploadStateCardFailed .uploadStateTitle {
+  color: var(--cm-red);
+}
+
+.uploadStateCardFailed .uploadStateBody {
+  color: var(--cm-text-soft);
+}
+
 .readyBox {
   display: grid;
   flex: 0 0 var(--cm-thumb-strip-width);
@@ -252,11 +337,20 @@
   padding: var(--cm-card-padding);
 }
 
+.nudgeCardFailed {
+  border-color: color-mix(in srgb, var(--cm-red) 68%, var(--cm-border));
+  background: color-mix(in srgb, var(--cm-surface-raised) 88%, var(--cm-red));
+}
+
 .nudgeLink {
   min-width: 0;
   color: var(--cm-text);
   font-weight: 850;
   line-height: var(--cm-line-body);
+}
+
+.nudgeCardFailed .nudgeLink {
+  color: var(--cm-red-soft);
 }
 
 .dismiss {

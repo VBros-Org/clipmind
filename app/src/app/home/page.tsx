@@ -4,7 +4,9 @@ import { loadHomeOverview } from "../../../lib/app-overview";
 import { AppShell } from "../AppShell";
 import { requireCreatorSession } from "../app-session";
 
+import { HomeVisibilityRefresh } from "./HomeVisibilityRefresh";
 import { HomeNudges } from "./HomeNudges";
+import { PostedWinLine } from "./PostedWinLine";
 import {
   ReadyToPostRow,
   type ReadyToPostClipView,
@@ -24,12 +26,15 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
   return (
     <AppShell activeTab="home" reviewCount={overview.reviewCount}>
+      <HomeVisibilityRefresh />
       <section className={styles.stack}>
+        <PostedWinLine postedThisWeek={overview.stats.postedThisWeek} />
         <RunwayHero runway={overview.runway} />
         {overview.nextUp ? <NextUpCard nextUp={overview.nextUp} /> : null}
         <HomeNudges nudges={overview.nudges} />
         <ReadyToPostRow
           clips={overview.readyToPost.map(serializeReadyClip)}
+          uploadCards={overview.uploadCards}
           initialClipId={params.post ?? null}
         />
         <footer className={styles.stats} aria-label="Clip stats">
@@ -63,6 +68,23 @@ function RunwayHero({
           set your rhythm to see runway
         </Link>
       </section>
+    );
+  }
+
+  if (runway.tone === "refill") {
+    return (
+      <Link
+        aria-labelledby="runway-title"
+        className={`${styles.runwayHero} ${styles.refill} ${styles.runwayHeroLink}`}
+        data-testid="runway-hero"
+        href="/upload"
+      >
+        <p className={styles.runwayNumber} id="runway-title">
+          0
+        </p>
+        <p className={styles.runwayLabel}>Refill your runway</p>
+        <span className={styles.runwayAction}>Add a long video</span>
+      </Link>
     );
   }
 

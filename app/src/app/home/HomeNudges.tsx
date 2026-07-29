@@ -11,14 +11,15 @@ type HomeNudgesProps = {
   nudges: HomeNudge[];
 };
 
-const STORAGE_KEY = "clipmind.dismissedHomeNudges";
+const PERSISTENT_STORAGE_KEY = "clipmind.dismissedHomeNudges";
+const SESSION_STORAGE_KEY = "clipmind.dismissedHomeNudges.session";
 
 export function HomeNudges({ nudges }: HomeNudgesProps) {
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    setDismissed(readDismissed());
-  }, []);
+    setDismissed(readDismissed(nudges));
+  }, [nudges]);
 
   const visibleNudges = useMemo(
     () => nudges.filter((nudge) => !dismissed.has(nudge.id)),
@@ -29,11 +30,11 @@ export function HomeNudges({ nudges }: HomeNudgesProps) {
     return null;
   }
 
-  function dismiss(id: string) {
+  function dismiss(nudge: HomeNudge) {
     setDismissed((current) => {
       const next = new Set(current);
-      next.add(id);
-      writeDismissed(next);
+      next.add(nudge.id);
+      writeDismissed(nudge);
       return next;
     });
   }
@@ -41,14 +42,19 @@ export function HomeNudges({ nudges }: HomeNudgesProps) {
   return (
     <section className={styles.nudges} aria-label="Next actions">
       {visibleNudges.map((nudge) => (
-        <article className={styles.nudgeCard} key={nudge.id}>
+        <article
+          className={`${styles.nudgeCard} ${
+            nudge.kind === "failed" ? styles.nudgeCardFailed : ""
+          }`}
+          key={nudge.id}
+        >
           <Link className={styles.nudgeLink} href={nudge.href}>
             {nudge.title}
           </Link>
           <button
             aria-label={`Dismiss ${nudge.title}`}
             className={styles.dismiss}
-            onClick={() => dismiss(nudge.id)}
+            onClick={() => dismiss(nudge)}
             type="button"
           >
             Dismiss
@@ -59,14 +65,34 @@ export function HomeNudges({ nudges }: HomeNudgesProps) {
   );
 }
 
-function readDismissed(): Set<string> {
+function readDismissed(nudges: readonly HomeNudge[]): Set<string> {
+  const persistent = readDismissedKey(localStorage, PERSISTENT_STORAGE_KEY);
+  const session = readDismissedKey(sessionStorage, SESSION_STORAGE_KEY);
+  const dismissed = new Set<string>();
+
+  for (const nudge of nudges) {
+    const source = nudge.dismissal === "session" ? session : persistent;
+    if (source.has(nudge.id)) {
+      dismissed.add(nudge.id);
+    }
+  }
+
+  return dismissed;
+}
+
+function readDismissedKey(storage: Storage, key: string): Set<string> {
   try {
-    return new Set(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]"));
+    return new Set(JSON.parse(storage.getItem(key) ?? "[]"));
   } catch {
     return new Set();
   }
 }
 
-function writeDismissed(value: Set<string>) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify([...value]));
+function writeDismissed(nudge: HomeNudge) {
+  const key =
+    nudge.dismissal === "session" ? SESSION_STORAGE_KEY : PERSISTENT_STORAGE_KEY;
+  const storage = nudge.dismissal === "session" ? sessionStorage : localStorage;
+  const dismissed = readDismissedKey(storage, key);
+  dismissed.add(nudge.id);
+  storage.setItem(key, JSON.stringify([...dismissed]));
 }

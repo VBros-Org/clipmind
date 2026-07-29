@@ -46,7 +46,10 @@ export async function runPushTick(
   };
 
   for (const creator of creators) {
-    const dueNudges = computeDueNudges(creator, now);
+    const dueNudges = pushEnabledNudges(
+      computeDueNudges(creator, now),
+      creator.schedule?.pushNudges === true,
+    );
     result.nudgesDue += dueNudges.length;
 
     for (const nudge of dueNudges) {
@@ -76,9 +79,20 @@ async function loadPushNudgeCreatorStates(
 ): Promise<NudgeCreatorState[]> {
   const creators = await db.creator.findMany({
     where: {
-      schedule: {
-        pushNudges: true,
-      },
+      OR: [
+        {
+          schedule: {
+            pushNudges: true,
+          },
+        },
+        {
+          videos: {
+            some: {
+              pipelineStage: "failed",
+            },
+          },
+        },
+      ],
       pushSubscriptions: {
         some: {
           disabledAt: null,
@@ -105,7 +119,8 @@ async function loadPushNudgeCreatorStates(
 
   return Promise.all(
     creators.map(async (creator) => {
-      const [reviewCount, queuedClipCount, scheduledClips] = await Promise.all([
+      const [reviewCount, queuedClipCount, scheduledClips, failedVideos] =
+        await Promise.all([
         db.clip.count({
           where: {
             creatorId: creator.id,
@@ -145,6 +160,25 @@ async function loadPushNudgeCreatorStates(
             postedAt: true,
           },
         }),
+        db.video.findMany({
+          where: {
+            creatorId: creator.id,
+            pipelineStage: "failed",
+          },
+          orderBy: [
+            {
+              createdAt: "asc",
+            },
+            {
+              id: "asc",
+            },
+          ],
+          select: {
+            id: true,
+            pipelineStage: true,
+            pipelineError: true,
+          },
+        }),
       ]);
 
       return {
@@ -153,9 +187,23 @@ async function loadPushNudgeCreatorStates(
         queuedClipCount,
         schedule: creator.schedule,
         scheduledClips,
+        failedVideos,
       };
     }),
   );
+}
+
+function pushEnabledNudges(
+  nudges: DueNudge[],
+  pushNudges: boolean,
+): DueNudge[] {
+  if (pushNudges) {
+    return nudges;
+  }
+
+  // Failed upload pushes bypass the schedule-level push toggle. Review, runway,
+  // and post-time pushes are optional reminders; a failed pipeline is not.
+  return nudges.filter((nudge) => nudge.kind === "failed");
 }
 
 async function reserveNudge(

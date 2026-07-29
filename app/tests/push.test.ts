@@ -41,6 +41,9 @@ test("push tick rejects a bad CRON_SECRET", async () => {
 test("push tick dedupes the same nudge key", async () => {
   const fixture = await createPushFixture("dedupe");
   const disabledCreatorIds = await disableOtherPushSchedules([fixture.creatorId]);
+  const disabledSubscriptionIds = await disableOtherPushSubscriptions([
+    fixture.creatorId,
+  ]);
   const now = new Date("2026-07-29T09:05:00.000Z");
   let sendCalls = 0;
 
@@ -83,6 +86,66 @@ test("push tick dedupes the same nudge key", async () => {
     });
     assert.equal(logCount, 1);
   } finally {
+    await restorePushSubscriptions(disabledSubscriptionIds);
+    await restorePushSchedules(disabledCreatorIds);
+    await cleanupPushFixture(fixture);
+  }
+});
+
+test("push tick sends failed upload nudges once when push reminders are off", async () => {
+  const fixture = await createFailedPushFixture("failed-always-on");
+  const disabledCreatorIds = await disableOtherPushSchedules([fixture.creatorId]);
+  const disabledSubscriptionIds = await disableOtherPushSubscriptions([
+    fixture.creatorId,
+  ]);
+  const now = new Date("2026-07-29T09:15:00.000Z");
+  let sendCalls = 0;
+
+  try {
+    const first = await runPushTick(now, {
+      prismaClient: prisma,
+      sendPushNudgeToCreatorImpl: async (creatorId, nudge) => {
+        sendCalls += 1;
+        assert.equal(creatorId, fixture.creatorId);
+        assert.equal(nudge.kind, "failed");
+        assert.equal(nudge.dedupeKey, fixture.videoId);
+        assert.equal(
+          nudge.title,
+          "Upload failed at captions. Tap to retry.",
+        );
+        return {
+          creatorId,
+          attempted: 1,
+          sent: 1,
+          disabled: 0,
+          failures: [],
+          messageIds: ["projects/test/messages/failed"],
+        };
+      },
+    });
+    assert.equal(first.sent, 1);
+    assert.equal(first.skippedDuplicate, 0);
+
+    const second = await runPushTick(now, {
+      prismaClient: prisma,
+      sendPushNudgeToCreatorImpl: async () => {
+        throw new Error("Duplicate failure should not send.");
+      },
+    });
+    assert.equal(second.sent, 0);
+    assert.equal(second.skippedDuplicate, 1);
+    assert.equal(sendCalls, 1);
+
+    const logCount = await prisma.nudgeLog.count({
+      where: {
+        creatorId: fixture.creatorId,
+        kind: "failed",
+        dedupeKey: fixture.videoId,
+      },
+    });
+    assert.equal(logCount, 1);
+  } finally {
+    await restorePushSubscriptions(disabledSubscriptionIds);
     await restorePushSchedules(disabledCreatorIds);
     await cleanupPushFixture(fixture);
   }
@@ -181,6 +244,57 @@ async function createPushFixture(label: string): Promise<PushFixture> {
   };
 }
 
+async function createFailedPushFixture(label: string): Promise<PushFixture> {
+  const marker = `push-${label}-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2)}`;
+  const creator = await prisma.creator.create({
+    data: {
+      accessCode: `${marker}-code`,
+      channelUrl: `https://example.com/${marker}`,
+      captionStyle: {
+        preset: "clean-bold",
+      },
+    },
+  });
+  const video = await prisma.video.create({
+    data: {
+      creatorId: creator.id,
+      contentKey: `${marker}-video`,
+      sourceUrl: "https://example.com/source.mp4",
+      status: "uploaded",
+      pipelineStage: "failed",
+      pipelineError: "captions: LLM call failed.",
+    },
+  });
+  await prisma.schedule.create({
+    data: {
+      creatorId: creator.id,
+      slots: [],
+      rotation: {},
+      slotsPerDay: 2,
+      anchorHour: 9,
+      reviewReminders: false,
+      runwayWarnings: false,
+      postTimeNudges: false,
+      pushNudges: false,
+    },
+  });
+  await prisma.pushSubscription.create({
+    data: {
+      creatorId: creator.id,
+      token: `${marker}-token`,
+      userAgent: "node-test",
+    },
+  });
+
+  return {
+    creatorId: creator.id,
+    videoId: video.id,
+    clipId: "",
+  };
+}
+
 async function cleanupPushFixture(fixture: PushFixture): Promise<void> {
   await prisma.nudgeLog.deleteMany({
     where: {
@@ -258,6 +372,54 @@ async function restorePushSchedules(creatorIds: string[]): Promise<void> {
     },
     data: {
       pushNudges: true,
+    },
+  });
+}
+
+async function disableOtherPushSubscriptions(
+  excludedCreatorIds: string[],
+): Promise<string[]> {
+  const subscriptions = await prisma.pushSubscription.findMany({
+    where: {
+      creatorId: {
+        notIn: excludedCreatorIds,
+      },
+      disabledAt: null,
+    },
+    select: {
+      id: true,
+    },
+  });
+  const subscriptionIds = subscriptions.map((subscription) => subscription.id);
+  if (subscriptionIds.length > 0) {
+    await prisma.pushSubscription.updateMany({
+      where: {
+        id: {
+          in: subscriptionIds,
+        },
+      },
+      data: {
+        disabledAt: new Date("2026-07-29T00:00:00.000Z"),
+      },
+    });
+  }
+
+  return subscriptionIds;
+}
+
+async function restorePushSubscriptions(subscriptionIds: string[]): Promise<void> {
+  if (subscriptionIds.length === 0) {
+    return;
+  }
+
+  await prisma.pushSubscription.updateMany({
+    where: {
+      id: {
+        in: subscriptionIds,
+      },
+    },
+    data: {
+      disabledAt: null,
     },
   });
 }

@@ -4,7 +4,9 @@ export {
   runwayTone,
   selectHomeNudges,
   type HomeNudge,
+  type HomeNudgeDismissal,
   type HomeNudgeInput,
+  type NudgeFailedVideo,
   type RunwayState,
   type RunwayTone,
 } from "./nudges";

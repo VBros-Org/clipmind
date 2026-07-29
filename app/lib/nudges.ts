@@ -1,9 +1,14 @@
 import { DEFAULT_RUNWAY_THRESHOLD_DAYS } from "./schedule-settings";
+import {
+  failedUploadNudgeTitle,
+  failedUploadTitle,
+} from "./upload-stage-copy";
 
 export const RUNWAY_WARNING_THRESHOLD_DAYS = DEFAULT_RUNWAY_THRESHOLD_DAYS;
 
-export type NudgeKind = "review" | "runway" | "post";
-export type RunwayTone = "calm" | "amber" | "red";
+export type NudgeKind = "review" | "runway" | "post" | "failed";
+export type RunwayTone = "refill" | "calm" | "amber" | "red";
+export type HomeNudgeDismissal = "persistent" | "session";
 
 export type RunwayState =
   | {
@@ -34,6 +39,7 @@ export type NudgeCreatorState = {
   queuedClipCount: number;
   schedule: NudgeSchedule;
   scheduledClips: readonly NudgeScheduledClip[];
+  failedVideos?: readonly NudgeFailedVideo[];
 };
 
 export type NudgeScheduledClip = {
@@ -41,6 +47,12 @@ export type NudgeScheduledClip = {
   scheduledFor: Date | null;
   status?: string;
   postedAt?: Date | null;
+};
+
+export type NudgeFailedVideo = {
+  id: string;
+  pipelineStage?: string | null;
+  pipelineError?: string | null;
 };
 
 export type DueNudge =
@@ -75,27 +87,27 @@ export type DueNudge =
       data: NudgeData & {
         clipId: string;
       };
+    }
+  | {
+      id: string;
+      kind: "failed";
+      dedupeKey: string;
+      title: string;
+      notificationTitle: string;
+      body: string;
+      href: "/upload";
+      data: NudgeData & {
+        videoId: string;
+      };
     };
 
-export type HomeNudge =
-  | {
-      id: string;
-      kind: "review";
-      title: string;
-      href: "/review";
-    }
-  | {
-      id: string;
-      kind: "runway";
-      title: string;
-      href: "/upload";
-    }
-  | {
-      id: string;
-      kind: "post";
-      title: string;
-      href: string;
-    };
+export type HomeNudge = {
+  id: string;
+  kind: NudgeKind;
+  title: string;
+  href: string;
+  dismissal: HomeNudgeDismissal;
+};
 
 export type HomeNudgeInput = {
   reviewCount: number;
@@ -108,6 +120,7 @@ export type HomeNudgeInput = {
       }
     | null
     | undefined;
+  failedVideos?: readonly NudgeFailedVideo[];
   reviewReminders?: boolean;
   runwayWarnings?: boolean;
   runwayWarningThresholdDays?: number;
@@ -118,6 +131,8 @@ type NudgeData = {
   url: string;
   kind: NudgeKind;
   dedupeKey: string;
+  clipId?: string;
+  videoId?: string;
 };
 
 export function computeRunway(
@@ -151,15 +166,19 @@ export function computeRunway(
 }
 
 export function runwayTone(days: number): RunwayTone {
+  if (days <= 0) {
+    return "refill";
+  }
+
   if (days >= 5) {
     return "calm";
   }
 
-  if (days >= RUNWAY_WARNING_THRESHOLD_DAYS) {
-    return "amber";
+  if (days <= 2) {
+    return "red";
   }
 
-  return "red";
+  return "amber";
 }
 
 export function computeDueNudges(
@@ -171,6 +190,12 @@ export function computeDueNudges(
   const nudges: DueNudge[] = [];
   const dateKey = utcDateKey(now);
   const schedule = creator.schedule;
+
+  // Failed uploads are always-on. Review, runway, and post toggles control
+  // optional reminders, but a broken pipeline is required state information.
+  for (const video of failedVideosForNudges(creator.failedVideos ?? [])) {
+    nudges.push(failedNudge(video.id, video.pipelineError));
+  }
 
   if (schedule?.reviewReminders !== false && creator.reviewCount > 0) {
     nudges.push(reviewNudge(creator.reviewCount, dateKey));
@@ -205,6 +230,10 @@ export function selectHomeNudges(input: HomeNudgeInput): HomeNudge[] {
     input.runwayWarningThresholdDays ?? RUNWAY_WARNING_THRESHOLD_DAYS;
   const nudges: DueNudge[] = [];
   const dateKey = "home";
+
+  for (const video of failedVideosForNudges(input.failedVideos ?? [])) {
+    nudges.push(failedNudge(video.id, video.pipelineError));
+  }
 
   if (input.reviewReminders !== false && input.reviewCount > 0) {
     nudges.push(reviewNudge(input.reviewCount, dateKey));
@@ -307,6 +336,30 @@ function postNudge(clipId: string, timeLabel: string): DueNudge {
   };
 }
 
+function failedNudge(
+  videoId: string,
+  pipelineError: string | null | undefined,
+): DueNudge {
+  const title = failedUploadNudgeTitle(pipelineError);
+  const notificationTitle = failedUploadTitle(pipelineError);
+
+  return {
+    id: `failed:${videoId}`,
+    kind: "failed",
+    dedupeKey: videoId,
+    title,
+    notificationTitle,
+    body: "Tap to retry.",
+    href: "/upload",
+    data: {
+      url: "/upload",
+      kind: "failed",
+      dedupeKey: videoId,
+      videoId,
+    },
+  };
+}
+
 function dueScheduledClips(
   clips: readonly NudgeScheduledClip[],
   now: Date,
@@ -340,6 +393,7 @@ function toHomeNudge(nudge: DueNudge): HomeNudge {
         kind: nudge.kind,
         title: nudge.title,
         href: nudge.href,
+        dismissal: "persistent",
       };
     case "runway":
       return {
@@ -347,6 +401,7 @@ function toHomeNudge(nudge: DueNudge): HomeNudge {
         kind: nudge.kind,
         title: nudge.title,
         href: nudge.href,
+        dismissal: "persistent",
       };
     case "post":
       return {
@@ -354,8 +409,35 @@ function toHomeNudge(nudge: DueNudge): HomeNudge {
         kind: nudge.kind,
         title: nudge.title,
         href: nudge.href,
+        dismissal: "persistent",
+      };
+    case "failed":
+      return {
+        id: nudge.id,
+        kind: nudge.kind,
+        title: nudge.title,
+        href: nudge.href,
+        dismissal: "session",
       };
   }
+}
+
+function failedVideosForNudges(
+  videos: readonly NudgeFailedVideo[],
+): NudgeFailedVideo[] {
+  const seen = new Set<string>();
+  const failedVideos: NudgeFailedVideo[] = [];
+
+  for (const video of videos) {
+    if (video.pipelineStage !== "failed" || seen.has(video.id)) {
+      continue;
+    }
+
+    seen.add(video.id);
+    failedVideos.push(video);
+  }
+
+  return failedVideos;
 }
 
 function plural(count: number, singular: string, pluralValue: string): string {
