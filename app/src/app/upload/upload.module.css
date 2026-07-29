@@ -163,12 +163,16 @@
 }
 
 .checkStep_pending {
-  opacity: 0.78;
+  background: var(--cm-surface-soft);
+}
+
+.checkStep_pending .checkLabel {
+  color: var(--cm-text-soft);
 }
 
 .checkStep_failed {
-  border-color: #ef4444;
-  background: #fff1f2;
+  border-color: var(--cm-red);
+  background: var(--cm-surface-raised);
 }
 
 .checkMark {
@@ -195,8 +199,9 @@
 }
 
 .checkStep_failed .checkMark {
-  background: #ef4444;
-  color: #ffffff;
+  border: var(--cm-border-width) solid color-mix(in srgb, var(--cm-red) 55%, transparent);
+  background: color-mix(in srgb, var(--cm-red) 18%, var(--cm-surface-raised));
+  color: var(--cm-red-soft);
 }
 
 .checkCopy {
@@ -210,6 +215,14 @@
   color: var(--cm-text);
   font-size: var(--cm-font-body);
   font-weight: 900;
+}
+
+.checkStep_failed .checkLabel {
+  color: var(--cm-text);
+}
+
+.checkStep_failed .checkLine {
+  color: var(--cm-red-soft);
 }
 
 .reviewLink {
@@ -227,10 +240,10 @@
 
 .errorText {
   margin: 0;
-  border: var(--cm-border-width) solid #ef4444;
+  border: var(--cm-border-width) solid var(--cm-red);
   border-radius: var(--cm-radius-action);
-  background: #fff1f2;
-  color: #991b1b;
+  background: var(--cm-surface-raised);
+  color: var(--cm-red-soft);
   font-size: var(--cm-font-secondary);
   font-weight: 800;
   padding: var(--cm-space-3);

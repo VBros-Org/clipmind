@@ -5,6 +5,7 @@ import busboy from "busboy";
 import type { PrismaClient } from "@prisma/client";
 
 import { prisma } from "./db";
+import { loadRecentUploads } from "./app-overview";
 import {
   PIPELINE_STAGES,
   failedPipelineStage,
@@ -192,6 +193,27 @@ export async function handleGetVideoStatus(
       error: workflow.error,
       failedStage: workflow.failedStage,
       clipCount: video.clips.length,
+    },
+    200,
+  );
+}
+
+export async function handleGetRecentUploads(
+  request: Request,
+  options: VideoApiOptions = {},
+): Promise<Response> {
+  const session = await loadCreatorSession(request, options);
+  if (!session) {
+    return json({ error: "Login required." }, 401);
+  }
+
+  const recentUploads = await loadRecentUploads(session.creatorId, {
+    prismaClient: options.prismaClient ?? prisma,
+  });
+
+  return json(
+    {
+      uploads: recentUploads,
     },
     200,
   );
