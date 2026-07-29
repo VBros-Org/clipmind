@@ -18,6 +18,11 @@ import {
 } from "./ranking";
 import { runSchedulePass } from "./scheduling-repository";
 import {
+  syncTasteFeedback,
+  type SyncTasteFeedbackOptions,
+  type SyncTasteFeedbackResult,
+} from "./tasteFeedback";
+import {
   generateClipThumbnail,
   type GenerateClipThumbnailOptions,
   type GenerateClipThumbnailResult,
@@ -84,6 +89,11 @@ type GenerateClipThumbnailImpl = (
   options?: GenerateClipThumbnailOptions,
 ) => Promise<GenerateClipThumbnailResult>;
 
+type SyncTasteFeedbackImpl = (
+  creatorId: string,
+  options?: SyncTasteFeedbackOptions,
+) => Promise<SyncTasteFeedbackResult>;
+
 export type PipelineOptions = {
   prismaClient?: PrismaClient;
   ingestUploadedVideoImpl?: IngestUploadedVideoImpl;
@@ -95,6 +105,9 @@ export type PipelineOptions = {
   generateClipThumbnailImpl?: GenerateClipThumbnailImpl;
   thumbnailOptions?: Omit<GenerateClipThumbnailOptions, "prismaClient">;
   thumbnailLogger?: Pick<Console, "warn">;
+  syncTasteFeedbackImpl?: SyncTasteFeedbackImpl;
+  tasteFeedbackOptions?: Omit<SyncTasteFeedbackOptions, "prismaClient">;
+  tasteFeedbackLogger?: Pick<Console, "error">;
   onStageChange?: (stage: PipelineStage) => void | Promise<void>;
 };
 
@@ -137,6 +150,7 @@ export async function runPipeline(
 
   let activeStage = resolveStartStage(video.pipelineStage, video.pipelineError);
   if (activeStage === "done") {
+    await syncTasteFeedbackAfterPipeline(db, video.creatorId, options);
     return doneResult(db, video.id, video.creatorId, []);
   }
   if (activeStage === "uploaded") {
@@ -208,6 +222,7 @@ export async function runPipeline(
     await runSchedulePass(video.creatorId, new Date(), {
       prismaClient: db,
     });
+    await syncTasteFeedbackAfterPipeline(db, video.creatorId, options);
     return doneResult(db, video.id, video.creatorId, captionedClipIds);
   } catch (error) {
     const failedStage = toRetryableStage(activeStage);
@@ -230,6 +245,25 @@ export async function runPipeline(
       failedStage,
       error: errorText,
     };
+  }
+}
+
+async function syncTasteFeedbackAfterPipeline(
+  db: PrismaClient,
+  creatorId: string,
+  options: PipelineOptions,
+): Promise<void> {
+  const syncImpl = options.syncTasteFeedbackImpl ?? syncTasteFeedback;
+
+  try {
+    await syncImpl(creatorId, {
+      ...options.tasteFeedbackOptions,
+      prismaClient: db,
+    });
+  } catch (error) {
+    (options.tasteFeedbackLogger ?? console).error(
+      `Taste feedback sync failed after pipeline for creator ${creatorId}: ${shortErrorMessage(error)}`,
+    );
   }
 }
 

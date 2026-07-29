@@ -89,7 +89,7 @@ test("runPipeline progresses uploaded video through ingest, ranking, top-two cap
   }
 });
 
-test("runPipeline triggers scheduling after the pipeline reaches done", async () => {
+test("runPipeline triggers scheduling and taste feedback after the pipeline reaches done", async () => {
   const fixture = await createPipelineFixture();
   const mindsClient = scriptedMindsClient([
     JSON.stringify([
@@ -99,6 +99,7 @@ test("runPipeline triggers scheduling after the pipeline reaches done", async ()
     captionReply("First top clip"),
     captionReply("Second top clip"),
   ]);
+  const tasteSyncCalls: string[] = [];
 
   try {
     const acceptedClip = await prisma.clip.create({
@@ -131,8 +132,19 @@ test("runPipeline triggers scheduling after the pipeline reaches done", async ()
         mindsClient,
       },
       generateClipThumbnailImpl: fakeThumbnailImpl(),
+      syncTasteFeedbackImpl: async (creatorId, options) => {
+        assert.equal(creatorId, fixture.creatorId);
+        assert.equal(options?.prismaClient, prisma);
+        tasteSyncCalls.push(creatorId);
+        return {
+          status: "empty",
+          creatorId,
+          reason: "no_unsynced_verdicts",
+        };
+      },
     });
     assert.equal(result.status, "done");
+    assert.deepEqual(tasteSyncCalls, [fixture.creatorId]);
 
     const scheduledClip = await prisma.clip.findUniqueOrThrow({
       where: {
