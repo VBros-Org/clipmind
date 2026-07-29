@@ -136,6 +136,27 @@
   transition: width 160ms ease;
 }
 
+.transferNotice {
+  margin: 0;
+  border: var(--cm-border-width) solid var(--cm-border-strong);
+  border-radius: var(--cm-radius-action);
+  font-size: var(--cm-font-body);
+  font-weight: 900;
+  line-height: var(--cm-line-body);
+  padding: var(--cm-space-3);
+}
+
+.transferNotice_uploading {
+  background: color-mix(in srgb, var(--cm-amber) 18%, var(--cm-surface-raised));
+  color: var(--cm-text);
+}
+
+.transferNotice_safe {
+  border-color: color-mix(in srgb, var(--cm-accent) 65%, var(--cm-border));
+  background: color-mix(in srgb, var(--cm-accent) 22%, var(--cm-surface-raised));
+  color: var(--cm-text);
+}
+
 .checklist {
   display: grid;
   gap: var(--cm-space-2);
@@ -238,15 +259,37 @@
   text-decoration: none;
 }
 
-.errorText {
-  margin: 0;
+.errorPanel {
+  display: grid;
+  gap: var(--cm-space-3);
   border: var(--cm-border-width) solid var(--cm-red);
   border-radius: var(--cm-radius-action);
   background: var(--cm-surface-raised);
+  padding: var(--cm-space-3);
+}
+
+.errorText {
+  margin: 0;
   color: var(--cm-red-soft);
   font-size: var(--cm-font-secondary);
   font-weight: 800;
-  padding: var(--cm-space-3);
+}
+
+.tryAgainButton {
+  min-height: var(--cm-touch-target);
+  border: 0;
+  border-radius: var(--cm-radius-action);
+  background: var(--cm-red);
+  color: var(--cm-ink);
+  cursor: pointer;
+  font-size: var(--cm-font-secondary);
+  font-weight: 900;
+  padding-inline: var(--cm-space-3);
+}
+
+.tryAgainButton:disabled {
+  cursor: wait;
+  opacity: 0.7;
 }
 
 .sectionTitle {
