@@ -14,6 +14,7 @@ export type ScheduleSettings = {
   runwayWarnings: boolean;
   runwayThresholdDays: number;
   postTimeNudges: boolean;
+  pushNudges: boolean;
 };
 
 export const DEFAULT_SCHEDULE_SETTINGS: ScheduleSettings = {
@@ -23,6 +24,7 @@ export const DEFAULT_SCHEDULE_SETTINGS: ScheduleSettings = {
   runwayWarnings: true,
   runwayThresholdDays: DEFAULT_RUNWAY_THRESHOLD_DAYS,
   postTimeNudges: true,
+  pushNudges: false,
 };
 
 export class ScheduleSettingsValidationError extends Error {
@@ -60,6 +62,7 @@ export function parseScheduleSettingsPayload(
       MAX_RUNWAY_THRESHOLD_DAYS,
     ),
     postTimeNudges: readBoolean(payload.postTimeNudges, "postTimeNudges"),
+    pushNudges: readBoolean(payload.pushNudges, "pushNudges"),
   };
 }
 
@@ -74,6 +77,7 @@ export function scheduleSettingsFromRow(
         runwayWarnings: row.runwayWarnings,
         runwayThresholdDays: row.runwayThresholdDays,
         postTimeNudges: row.postTimeNudges,
+        pushNudges: row.pushNudges,
       }
     : null;
 }

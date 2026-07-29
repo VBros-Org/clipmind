@@ -14,6 +14,12 @@ const PRECACHE_URLS = [
   "/icons/clipmind-maskable-512.png"
 ];
 
+try {
+  importScripts("/firebase-messaging-sw.js");
+} catch (error) {
+  console.error("Firebase messaging import failed", error);
+}
+
 self.addEventListener("install", (event) => {
   event.waitUntil(precacheShell());
 });
@@ -51,6 +57,11 @@ self.addEventListener("fetch", (event) => {
   if (request.mode === "navigate") {
     event.respondWith(networkFirst(request, SHELL_CACHE));
   }
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil(openNotificationTarget(event.notification.data?.url));
 });
 
 async function precacheShell() {
@@ -140,4 +151,39 @@ function isStaticRequest(request, url) {
 
 function isMediaRequest(request) {
   return ["audio", "video"].includes(request.destination);
+}
+
+async function openNotificationTarget(rawUrl) {
+  const targetUrl = normalizeNotificationUrl(rawUrl);
+  const windows = await self.clients.matchAll({
+    type: "window",
+    includeUncontrolled: true
+  });
+
+  for (const client of windows) {
+    const clientUrl = new URL(client.url);
+    if (clientUrl.origin !== self.location.origin) {
+      continue;
+    }
+
+    if ("navigate" in client) {
+      await client.navigate(targetUrl.href);
+    }
+    return client.focus();
+  }
+
+  return self.clients.openWindow(targetUrl.href);
+}
+
+function normalizeNotificationUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl || "/home", self.location.origin);
+    if (url.origin === self.location.origin) {
+      return url;
+    }
+  } catch (error) {
+    return new URL("/home", self.location.origin);
+  }
+
+  return new URL("/home", self.location.origin);
 }

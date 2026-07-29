@@ -20,6 +20,7 @@ const validSettings: ScheduleSettings = {
   runwayWarnings: true,
   runwayThresholdDays: 3,
   postTimeNudges: false,
+  pushNudges: false,
 };
 
 test("schedule API requires auth and validates settings ranges", async () => {
@@ -39,6 +40,7 @@ test("schedule API requires auth and validates settings ranges", async () => {
       { ...validSettings, runwayThresholdDays: 0 },
       { ...validSettings, runwayThresholdDays: 8 },
       { ...validSettings, reviewReminders: "yes" },
+      { ...validSettings, pushNudges: "yes" },
     ];
 
     for (const payload of invalidCases) {

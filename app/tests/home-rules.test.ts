@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { computeRunway, selectHomeNudges } from "../lib/home-rules";
+import {
+  computeDueNudges,
+  computeRunway,
+  selectHomeNudges,
+  toHomeNudges,
+} from "../lib/nudges";
 
 test("computeRunway divides queued clips by slots per day", () => {
   assert.deepEqual(computeRunway(10, { slotsPerDay: 2 }), {
@@ -108,4 +113,60 @@ test("selectHomeNudges respects nudge toggles and runway threshold", () => {
   assert.equal(nudges.length, 1);
   assert.equal(nudges[0]?.kind, "runway");
   assert.equal(nudges[0]?.title, "Runway under 4 days. Upload something long.");
+});
+
+test("computeDueNudges projects to the same Home nudge cards", () => {
+  const now = new Date(2026, 6, 29, 10, 5, 0);
+  const due = computeDueNudges(
+    {
+      id: "creator-1",
+      reviewCount: 4,
+      queuedClipCount: 1,
+      schedule: {
+        slotsPerDay: 2,
+        reviewReminders: true,
+        runwayWarnings: true,
+        runwayThresholdDays: 2,
+        postTimeNudges: true,
+        pushNudges: true,
+      },
+      scheduledClips: [
+        {
+          id: "clip-1",
+          scheduledFor: new Date(2026, 6, 29, 10, 0, 0),
+          status: "scheduled",
+        },
+      ],
+    },
+    now,
+  );
+
+  assert.deepEqual(toHomeNudges(due), [
+    {
+      id: "review:4",
+      kind: "review",
+      title: "4 clips waiting for review",
+      href: "/review",
+    },
+    {
+      id: "runway:5:2",
+      kind: "runway",
+      title: "Runway under 2 days. Upload something long.",
+      href: "/upload",
+    },
+    {
+      id: "post:clip-1",
+      kind: "post",
+      title: "Clip scheduled for 10:00 is ready. Post it now.",
+      href: "/home?post=clip-1",
+    },
+  ]);
+  assert.deepEqual(
+    due.map((nudge) => [nudge.kind, nudge.dedupeKey]),
+    [
+      ["review", "2026-07-29"],
+      ["runway", "2026-07-29"],
+      ["post", "clip-1"],
+    ],
+  );
 });
