@@ -7,6 +7,7 @@ import { requireCreatorSession } from "../app-session";
 import { HomeVisibilityRefresh } from "./HomeVisibilityRefresh";
 import { HomeNudges } from "./HomeNudges";
 import { PostedWinLine } from "./PostedWinLine";
+import { PushHealthCard } from "./PushHealthCard";
 import {
   ReadyToPostRow,
   type ReadyToPostClipView,
@@ -25,11 +26,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const overview = await loadHomeOverview(session.creatorId);
 
   return (
-    <AppShell activeTab="home" reviewCount={overview.reviewCount}>
+    <AppShell
+      activeTab="home"
+      pushNudgesEnabled={overview.pushNudgesEnabled}
+      reviewCount={overview.reviewCount}
+    >
       <HomeVisibilityRefresh />
       <section className={styles.stack}>
         <PostedWinLine postedThisWeek={overview.stats.postedThisWeek} />
         <RunwayHero runway={overview.runway} />
+        <PushHealthCard pushNudgesEnabled={overview.pushNudgesEnabled} />
         {overview.nextUp ? <NextUpCard nextUp={overview.nextUp} /> : null}
         <HomeNudges nudges={overview.nudges} />
         <ReadyToPostRow

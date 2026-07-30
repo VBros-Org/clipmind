@@ -17,15 +17,26 @@ const CAPTION_PRESETS = [
   { id: "karaoke", label: "Karaoke" },
 ];
 
-export default async function RhythmPage() {
+type RhythmPageProps = {
+  searchParams?: Promise<{
+    push?: string;
+  }>;
+};
+
+export default async function RhythmPage({ searchParams }: RhythmPageProps) {
   const session = await requireCreatorSession();
+  const params = (await searchParams) ?? {};
   const [frame, overview] = await Promise.all([
     loadAppFrameData(session.creatorId),
     loadRhythmOverview(session.creatorId),
   ]);
 
   return (
-    <AppShell activeTab="rhythm" reviewCount={frame.reviewCount}>
+    <AppShell
+      activeTab="rhythm"
+      pushNudgesEnabled={frame.pushNudgesEnabled}
+      reviewCount={frame.reviewCount}
+    >
       <section className={styles.stack}>
         <header className={styles.header}>
           <p className={styles.eyebrow}>Rhythm</p>
@@ -33,6 +44,7 @@ export default async function RhythmPage() {
         </header>
 
         <RhythmControls
+          highlightPushNudges={params.push === "fix"}
           initialSettings={overview.schedule ?? DEFAULT_SCHEDULE_SETTINGS}
         />
 

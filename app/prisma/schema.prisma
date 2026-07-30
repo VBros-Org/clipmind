@@ -21,6 +21,7 @@ model Creator {
   initialTenets     Json? // distilled creator voice + clip-taste Tenets from onboarding
   captionCorpus     String? // creator-pasted recent post-copy captions, one per line
   captionStyle      Json? // burned-in subtitle preset: font, size, position, colour, highlight
+  timezone          String? // IANA timezone captured client-side for creator-local copy
   createdAt         DateTime           @default(now())
   inviteCode        InviteCode?
   videos            Video[]

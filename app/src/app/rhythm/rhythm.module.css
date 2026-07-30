@@ -305,6 +305,13 @@
   cursor: pointer;
 }
 
+.highlightRow {
+  border: var(--cm-border-width) solid
+    color-mix(in srgb, var(--cm-amber) 72%, var(--cm-border));
+  background: color-mix(in srgb, var(--cm-surface-soft) 74%, var(--cm-amber));
+  color: var(--cm-text);
+}
+
 .toggleRow input {
   width: var(--cm-space-5);
   height: var(--cm-space-5);

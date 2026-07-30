@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -13,20 +13,23 @@ import {
   slotTimeParts,
   type ScheduleSettings,
 } from "../../../lib/schedule-settings";
+import { resolvedCreatorTimezone } from "../client-timezone";
+import { markPushHealthHealthy } from "../push-health-client";
 
 import styles from "./rhythm.module.css";
-import {
-  hasGrantedPushPermission,
-  subscribeToPushNudges,
-} from "./push-client";
+import { subscribeToPushNudges } from "./push-client";
 
 type RhythmControlsProps = {
   initialSettings: ScheduleSettings;
+  highlightPushNudges?: boolean;
 };
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
-export function RhythmControls({ initialSettings }: RhythmControlsProps) {
+export function RhythmControls({
+  initialSettings,
+  highlightPushNudges = false,
+}: RhythmControlsProps) {
   const router = useRouter();
   const [settings, setSettings] = useState(initialSettings);
   const [saveState, setSaveState] = useState<SaveState>("idle");
@@ -34,33 +37,6 @@ export function RhythmControls({ initialSettings }: RhythmControlsProps) {
   const saveToken = useRef(0);
   const clearTimer = useRef<number | null>(null);
   const slotTimes = slotTimesForSettings(settings);
-
-  useEffect(() => {
-    if (!settings.pushNudges || !hasGrantedPushPermission()) {
-      return;
-    }
-
-    let active = true;
-    const syncToken = () => {
-      if (!active) {
-        return;
-      }
-
-      void subscribeToPushNudges({ requestPermission: false }).catch((error) => {
-        console.error("Push subscription refresh failed", error);
-      });
-    };
-
-    syncToken();
-    window.addEventListener("focus", syncToken);
-    navigator.serviceWorker?.addEventListener("controllerchange", syncToken);
-
-    return () => {
-      active = false;
-      window.removeEventListener("focus", syncToken);
-      navigator.serviceWorker?.removeEventListener("controllerchange", syncToken);
-    };
-  }, [settings.pushNudges]);
 
   function updateSettings(update: (current: ScheduleSettings) => ScheduleSettings) {
     const previous = settings;
@@ -81,7 +57,10 @@ export function RhythmControls({ initialSettings }: RhythmControlsProps) {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(next),
+        body: JSON.stringify({
+          ...next,
+          timezone: resolvedCreatorTimezone(),
+        }),
       });
 
       if (!response.ok) {
@@ -120,6 +99,7 @@ export function RhythmControls({ initialSettings }: RhythmControlsProps) {
 
   async function updatePushNudges(pushNudges: boolean) {
     if (!pushNudges) {
+      markPushHealthHealthy();
       updateSettings((current) => ({ ...current, pushNudges }));
       return;
     }
@@ -129,6 +109,7 @@ export function RhythmControls({ initialSettings }: RhythmControlsProps) {
 
     try {
       await subscribeToPushNudges({ requestPermission: true });
+      markPushHealthHealthy();
       updateSettings((current) => ({ ...current, pushNudges: true }));
     } catch (error) {
       console.error("Push subscription failed", error);
@@ -273,10 +254,12 @@ export function RhythmControls({ initialSettings }: RhythmControlsProps) {
         <ToggleRow
           checked={settings.pushNudges}
           disabled={saveState === "saving"}
+          highlighted={highlightPushNudges}
           label="Push nudges"
           onChange={(pushNudges) => {
             void updatePushNudges(pushNudges);
           }}
+          rowTestId="push-toggle-row"
         />
       </section>
     </>
@@ -416,16 +399,23 @@ function Stepper({
 function ToggleRow({
   checked,
   disabled = false,
+  highlighted = false,
   label,
   onChange,
+  rowTestId,
 }: {
   checked: boolean;
   disabled?: boolean;
+  highlighted?: boolean;
   label: string;
   onChange: (checked: boolean) => void;
+  rowTestId?: string;
 }) {
   return (
-    <label className={styles.toggleRow}>
+    <label
+      className={`${styles.toggleRow} ${highlighted ? styles.highlightRow : ""}`}
+      data-testid={rowTestId}
+    >
       <span>{label}</span>
       <input
         checked={checked}

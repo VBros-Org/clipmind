@@ -1,12 +1,14 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 
+import { PushHealthLaunchSync } from "./PushHealthLaunchSync";
 import styles from "./app-shell.module.css";
 
 export type AppTab = "home" | "upload" | "review" | "rhythm";
 
 type AppShellProps = {
   activeTab: AppTab;
+  pushNudgesEnabled: boolean;
   reviewCount: number;
   children: ReactNode;
 };
@@ -22,9 +24,15 @@ const tabs: Array<{
   { id: "rhythm", label: "Rhythm", href: "/rhythm" },
 ];
 
-export function AppShell({ activeTab, reviewCount, children }: AppShellProps) {
+export function AppShell({
+  activeTab,
+  pushNudgesEnabled,
+  reviewCount,
+  children,
+}: AppShellProps) {
   return (
     <main className={styles.screen}>
+      <PushHealthLaunchSync pushNudgesEnabled={pushNudgesEnabled} />
       <div className={styles.content}>{children}</div>
       <nav
         className={styles.tabBar}

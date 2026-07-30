@@ -11,6 +11,7 @@ import {
   type ScheduleSettings,
 } from "./schedule-settings";
 import { runSchedulePass } from "./scheduling-repository";
+import { normalizeCreatorTimezone } from "./timezone";
 
 type ScheduleApiOptions = {
   prismaClient?: PrismaClient;
@@ -51,9 +52,11 @@ export async function handlePutSchedule(
     return json({ error: "Login required." }, 401);
   }
 
+  let payload: unknown;
   let settings: ScheduleSettings;
   try {
-    settings = parseScheduleSettingsPayload(await request.json());
+    payload = await request.json();
+    settings = parseScheduleSettingsPayload(payload);
   } catch (error) {
     if (
       error instanceof SyntaxError ||
@@ -66,6 +69,18 @@ export async function handlePutSchedule(
   }
 
   const db = options.prismaClient ?? prisma;
+  const timezone = normalizeCreatorTimezone(readOptionalStringField(payload, "timezone"));
+  if (timezone) {
+    await db.creator.update({
+      where: {
+        id: session.creatorId,
+      },
+      data: {
+        timezone,
+      },
+    });
+  }
+
   const settingsData = scheduleSettingsWriteData(settings);
   const schedule = await db.schedule.upsert({
     where: {
@@ -141,4 +156,17 @@ function json(payload: unknown, status: number): Response {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function readOptionalStringField(payload: unknown, key: string): string | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+
+  const value = payload[key];
+  return typeof value === "string" ? value : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

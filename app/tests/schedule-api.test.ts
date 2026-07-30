@@ -76,7 +76,10 @@ test("schedule API persists rhythm per creator and does not leak across creators
 
   try {
     const putResponse = await handlePutSchedule(
-      requestWithCode(fixture.creatorACode, "PUT", validSettings),
+      requestWithCode(fixture.creatorACode, "PUT", {
+        ...validSettings,
+        timezone: "Asia/Bangkok",
+      }),
     );
     assert.equal(putResponse.status, 200);
 
@@ -100,6 +103,15 @@ test("schedule API persists rhythm per creator and does not leak across creators
     assert.deepEqual(storedSchedule.slots, validSettings.slotTimes);
     assert.deepEqual(storedSchedule.slotTimes, validSettings.slotTimes);
     assert.equal(storedSchedule.slotsPerDay, validSettings.slotTimes?.length);
+    const storedCreator = await prisma.creator.findUniqueOrThrow({
+      where: {
+        id: fixture.creatorAId,
+      },
+      select: {
+        timezone: true,
+      },
+    });
+    assert.equal(storedCreator.timezone, "Asia/Bangkok");
 
     const creatorAGet = await handleGetSchedule(
       requestWithCode(fixture.creatorACode),

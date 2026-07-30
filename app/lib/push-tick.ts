@@ -105,6 +105,7 @@ async function loadPushNudgeCreatorStates(
     },
     select: {
       id: true,
+      timezone: true,
       schedule: {
         select: {
           slotsPerDay: true,
@@ -186,6 +187,7 @@ async function loadPushNudgeCreatorStates(
 
       return {
         id: creator.id,
+        timezone: creator.timezone,
         reviewCount,
         queuedClipCount,
         schedule: scheduleSettingsFromRow(creator.schedule),

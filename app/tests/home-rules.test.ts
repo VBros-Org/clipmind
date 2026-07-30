@@ -158,6 +158,7 @@ test("computeDueNudges projects to the same Home nudge cards", () => {
   const due = computeDueNudges(
     {
       id: "creator-1",
+      timezone: "Asia/Bangkok",
       reviewCount: 4,
       queuedClipCount: 1,
       schedule: {
@@ -211,6 +212,69 @@ test("computeDueNudges projects to the same Home nudge cards", () => {
       ["post", "clip-1"],
     ],
   );
+});
+
+test("post nudge copy uses creator timezone and omits missing time", () => {
+  const due = computeDueNudges(
+    {
+      id: "creator-1",
+      timezone: "Asia/Bangkok",
+      reviewCount: 0,
+      queuedClipCount: 1,
+      schedule: {
+        slotsPerDay: 1,
+        reviewReminders: false,
+        runwayWarnings: false,
+        runwayThresholdDays: 2,
+        postTimeNudges: true,
+        pushNudges: true,
+      },
+      scheduledClips: [
+        {
+          id: "clip-bangkok",
+          scheduledFor: new Date("2026-07-29T21:00:00.000Z"),
+          status: "scheduled",
+        },
+      ],
+      failedVideos: [],
+    },
+    new Date("2026-07-29T21:05:00.000Z"),
+  );
+  assert.equal(due[0]?.kind, "post");
+  assert.equal(
+    due[0]?.title,
+    "Clip scheduled for 04:00 is ready. Post it now.",
+  );
+  assert.equal(due[0]?.notificationTitle, "Your 04:00 clip is ready to post");
+
+  const fallback = computeDueNudges(
+    {
+      id: "creator-1",
+      timezone: null,
+      reviewCount: 0,
+      queuedClipCount: 1,
+      schedule: {
+        slotsPerDay: 1,
+        reviewReminders: false,
+        runwayWarnings: false,
+        runwayThresholdDays: 2,
+        postTimeNudges: true,
+        pushNudges: true,
+      },
+      scheduledClips: [
+        {
+          id: "clip-no-zone",
+          scheduledFor: new Date("2026-07-29T21:00:00.000Z"),
+          status: "scheduled",
+        },
+      ],
+      failedVideos: [],
+    },
+    new Date("2026-07-29T21:05:00.000Z"),
+  );
+
+  assert.equal(fallback[0]?.title, "Clip is ready. Post it now.");
+  assert.equal(fallback[0]?.notificationTitle, "Your clip is ready to post");
 });
 
 test("computeDueNudges emits failed upload nudges with video dedupe", () => {

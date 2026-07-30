@@ -26,7 +26,11 @@ export default async function ReviewPage({ searchParams }: ReviewPageProps) {
   ]);
 
   return (
-    <AppShell activeTab="review" reviewCount={frame.reviewCount}>
+    <AppShell
+      activeTab="review"
+      pushNudgesEnabled={frame.pushNudgesEnabled}
+      reviewCount={frame.reviewCount}
+    >
       <section className={styles.pageStack}>
         <header className={styles.header}>
           <p className={styles.eyebrow}>Review</p>

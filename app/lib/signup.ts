@@ -10,6 +10,7 @@ import {
   normalizeAccessCode,
   readCookieValue,
 } from "./review-auth";
+import { normalizeCreatorTimezone } from "./timezone";
 
 export const SIGNUP_CREATOR_COOKIE = "clipmind_signup_creator";
 const SIGNUP_CREATOR_COOKIE_MAX_AGE_SECONDS = 60 * 30;
@@ -36,6 +37,7 @@ export type SignupProfileInput = {
   displayName: string;
   channelUrl: string | null;
   captionPreset: CaptionPresetId;
+  timezone: string | null;
 };
 
 class SignupApiError extends Error {
@@ -207,11 +209,15 @@ export function parseSignupProfile(payload: unknown): SignupProfileInput {
   if (!isCaptionPreset(captionPreset)) {
     throw new SignupApiError(400, "Pick a caption preset.");
   }
+  const timezone = normalizeCreatorTimezone(
+    readOptionalStringField(payload, "timezone"),
+  );
 
   return {
     displayName,
     channelUrl,
     captionPreset,
+    timezone,
   };
 }
 
@@ -271,6 +277,7 @@ async function completeSignupProfile(
           captionStyle: {
             preset: profile.captionPreset,
           } satisfies Prisma.InputJsonObject,
+          timezone: profile.timezone,
           accessCode,
           mindStage: "pending",
           mindError: null,

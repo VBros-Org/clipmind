@@ -28,11 +28,13 @@ import {
 export type { HomeNudge, RunwayState } from "./nudges";
 
 export type AppFrameData = {
+  pushNudgesEnabled: boolean;
   reviewCount: number;
 };
 
 export type HomeOverview = {
   runway: RunwayState;
+  pushNudgesEnabled: boolean;
   reviewCount: number;
   nextUp: NextScheduledClip | null;
   readyToPost: ReadyToPostClip[];
@@ -102,14 +104,25 @@ export async function loadAppFrameData(
   options: AppOverviewOptions = {},
 ): Promise<AppFrameData> {
   const db = options.prismaClient ?? prisma;
-  const reviewCount = await db.clip.count({
-    where: {
-      creatorId,
-      status: "candidate",
-    },
-  });
+  const [reviewCount, schedule] = await Promise.all([
+    db.clip.count({
+      where: {
+        creatorId,
+        status: "candidate",
+      },
+    }),
+    db.schedule.findUnique({
+      where: {
+        creatorId,
+      },
+      select: {
+        pushNudges: true,
+      },
+    }),
+  ]);
 
   return {
+    pushNudgesEnabled: schedule?.pushNudges === true,
     reviewCount,
   };
 }
@@ -129,6 +142,7 @@ export async function loadHomeOverview(
     totalPosted,
     totalClipsMade,
     postedThisWeek,
+    creator,
     nextScheduledClip,
     readyToPostClips,
     activeUploadVideos,
@@ -176,6 +190,14 @@ export async function loadHomeOverview(
     }),
     countPostedThisWeek(creatorId, now, {
       prismaClient: db,
+    }),
+    db.creator.findUniqueOrThrow({
+      where: {
+        id: creatorId,
+      },
+      select: {
+        timezone: true,
+      },
     }),
     db.clip.findFirst({
       where: {
@@ -288,6 +310,7 @@ export async function loadHomeOverview(
     computeDueNudges(
       {
         id: creatorId,
+        timezone: creator.timezone,
         reviewCount,
         queuedClipCount,
         schedule: scheduleSettings,
@@ -308,6 +331,7 @@ export async function loadHomeOverview(
 
   return {
     runway,
+    pushNudgesEnabled: scheduleSettings?.pushNudges === true,
     reviewCount,
     nextUp,
     readyToPost,
