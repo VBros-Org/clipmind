@@ -51,20 +51,40 @@ test("manifest has the required PWA fields and icon files", async () => {
   );
 });
 
-test("service worker is versioned and keeps media out of cache handling", async () => {
+test("service worker uses v2 network-first pages and static-only cache first", async () => {
   const serviceWorker = await readFile(
     resolve(process.cwd(), "public/sw.js"),
     "utf8",
   );
 
-  assert.match(serviceWorker, /clipmind-shell-v1/);
+  assert.match(serviceWorker, /clipmind-shell-v2/);
+  assert.doesNotMatch(serviceWorker, /clipmind-shell-v1/);
+  assert.match(serviceWorker, /function isDocumentRequest/);
+  assert.match(
+    serviceWorker,
+    /event\.respondWith\(networkFirst\(request, SHELL_CACHE\)\)/,
+  );
   assert.match(serviceWorker, /function networkFirst/);
   assert.match(serviceWorker, /function cacheFirst/);
+  assert.match(serviceWorker, /cacheFirst\(request, STATIC_CACHE\)/);
+  assert.match(serviceWorker, /url\.pathname\.startsWith\("\/_next\/static\/"\)/);
+  assert.match(serviceWorker, /url\.pathname\.startsWith\("\/icons\/"\)/);
+  assert.match(serviceWorker, /url\.pathname === "\/manifest\.webmanifest"/);
+
+  const precacheUrls = serviceWorker.match(
+    /const PRECACHE_URLS = \[([\s\S]*?)\];/,
+  )?.[1] ?? "";
+  assert.doesNotMatch(precacheUrls, /"\/"/);
+  assert.doesNotMatch(precacheUrls, /"\/login"/);
+  assert.doesNotMatch(precacheUrls, /"\/home"/);
+  assert.doesNotMatch(precacheUrls, /"\/upload"/);
+  assert.doesNotMatch(precacheUrls, /"\/review"/);
+  assert.doesNotMatch(precacheUrls, /"\/rhythm"/);
+
   assert.match(serviceWorker, /function isMediaRequest/);
   assert.match(serviceWorker, /firebase-messaging-sw\.js/);
   assert.match(serviceWorker, /notificationclick/);
   assert.match(serviceWorker, /\/home/);
-  assert.match(serviceWorker, /\/review/);
 });
 
 test("install platform detection handles installed apps first", () => {

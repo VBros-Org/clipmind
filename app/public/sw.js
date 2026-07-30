@@ -1,13 +1,7 @@
-const SHELL_CACHE = "clipmind-shell-v1";
+const SHELL_CACHE = "clipmind-shell-v2";
 const STATIC_CACHE = "clipmind-static-v1";
 const DATA_CACHE = "clipmind-data-v1";
 const PRECACHE_URLS = [
-  "/",
-  "/login",
-  "/home",
-  "/upload",
-  "/review",
-  "/rhythm",
   "/manifest.webmanifest",
   "/icons/clipmind-192.png",
   "/icons/clipmind-512.png",
@@ -21,7 +15,7 @@ try {
 }
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(precacheShell());
+  event.waitUntil(precacheStaticAssets());
 });
 
 self.addEventListener("activate", (event) => {
@@ -44,6 +38,11 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  if (isDocumentRequest(request)) {
+    event.respondWith(networkFirst(request, SHELL_CACHE));
+    return;
+  }
+
   if (isApiOrDataRequest(request, url)) {
     event.respondWith(networkFirst(request, DATA_CACHE));
     return;
@@ -53,10 +52,6 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(cacheFirst(request, STATIC_CACHE));
     return;
   }
-
-  if (request.mode === "navigate") {
-    event.respondWith(networkFirst(request, SHELL_CACHE));
-  }
 });
 
 self.addEventListener("notificationclick", (event) => {
@@ -64,8 +59,8 @@ self.addEventListener("notificationclick", (event) => {
   event.waitUntil(openNotificationTarget(event.notification.data?.url));
 });
 
-async function precacheShell() {
-  const cache = await caches.open(SHELL_CACHE);
+async function precacheStaticAssets() {
+  const cache = await caches.open(STATIC_CACHE);
 
   await Promise.allSettled(
     PRECACHE_URLS.map(async (url) => {
@@ -144,8 +139,15 @@ function isStaticRequest(request, url) {
   return (
     url.pathname.startsWith("/_next/static/") ||
     url.pathname.startsWith("/icons/") ||
-    url.pathname === "/manifest.webmanifest" ||
-    ["font", "image", "script", "style"].includes(request.destination)
+    url.pathname === "/manifest.webmanifest"
+  );
+}
+
+function isDocumentRequest(request) {
+  return (
+    request.mode === "navigate" ||
+    request.destination === "document" ||
+    request.headers.get("accept")?.includes("text/html") === true
   );
 }
 

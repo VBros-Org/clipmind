@@ -2,7 +2,6 @@ import { cookies } from "next/headers";
 
 import { CREATOR_ACCESS_COOKIE } from "../../../lib/review-auth";
 import { loadSignedInSignupAffordance } from "../../../lib/signup-page";
-import { logoutCreator } from "../session-actions";
 
 import { SignupFlow } from "./SignupFlow";
 import styles from "./signup.module.css";
@@ -26,7 +25,7 @@ export default async function SignupPage() {
           </h1>
           <div className={styles.signedInCard}>
             <p className={styles.signedInMessage}>{signedIn.message}</p>
-            <form action={logoutCreator}>
+            <form action="/api/session/logout" method="post">
               <button className={styles.secondaryButton} type="submit">
                 Log out
               </button>

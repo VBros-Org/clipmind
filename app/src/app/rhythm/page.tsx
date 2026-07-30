@@ -3,7 +3,6 @@ import { channelPullStatusResponse } from "../../../lib/channelPull";
 import { DEFAULT_SCHEDULE_SETTINGS } from "../../../lib/schedule-settings";
 import { AppShell } from "../AppShell";
 import { requireCreatorSession } from "../app-session";
-import { logoutCreator } from "../session-actions";
 
 import { RhythmControls } from "./RhythmControls";
 import { VoiceCard } from "./VoiceCard";
@@ -89,7 +88,7 @@ export default async function RhythmPage({ searchParams }: RhythmPageProps) {
             <span>Channel URL</span>
             <span>{overview.creator.channelUrl ?? "No channel saved."}</span>
           </div>
-          <form action={logoutCreator}>
+          <form action="/api/session/logout" method="post">
             <button className={styles.logoutButton} type="submit">
               Log out
             </button>
