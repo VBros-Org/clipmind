@@ -55,7 +55,7 @@
     "test:push": "tsc -p tsconfig.scripts.json && node --env-file=.env --test dist/tests/push.test.js dist/tests/push-health.test.js",
     "test:review": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env --test dist/tests/review-api.test.js dist/tests/reject-undo.test.js dist/tests/schedule-api.test.js",
     "test:pipeline": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env --test dist/tests/pipeline.test.js dist/tests/video-api.test.js",
-    "test:signup": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env --test dist/tests/signup-api.test.js dist/tests/video-onboarding.test.js dist/tests/voice-corpus.test.js dist/tests/channelPull.test.js"
+    "test:signup": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env --test dist/tests/signup-api.test.js dist/tests/signup-page.test.js dist/tests/video-onboarding.test.js dist/tests/voice-corpus.test.js dist/tests/channelPull.test.js"
   },
   "engines": {
     "node": ">=22"

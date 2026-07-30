@@ -1,12 +1,9 @@
-import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
-
 import { loadAppFrameData, loadRhythmOverview } from "../../../lib/app-overview";
 import { channelPullStatusResponse } from "../../../lib/channelPull";
-import { CREATOR_ACCESS_COOKIE } from "../../../lib/review-auth";
 import { DEFAULT_SCHEDULE_SETTINGS } from "../../../lib/schedule-settings";
 import { AppShell } from "../AppShell";
 import { requireCreatorSession } from "../app-session";
+import { logoutCreator } from "../session-actions";
 
 import { RhythmControls } from "./RhythmControls";
 import { VoiceCard } from "./VoiceCard";
@@ -101,12 +98,4 @@ export default async function RhythmPage({ searchParams }: RhythmPageProps) {
       </section>
     </AppShell>
   );
-}
-
-async function logoutCreator() {
-  "use server";
-
-  const cookieStore = await cookies();
-  cookieStore.delete(CREATOR_ACCESS_COOKIE);
-  redirect("/login");
 }
