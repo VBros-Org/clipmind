@@ -9,6 +9,7 @@ import {
   capCaptionCorpusInput,
   countCaptionCorpusLines,
 } from "../../../lib/caption-corpus";
+import { resolvedCreatorTimezone } from "../client-timezone";
 import { UploadPicker } from "../upload/UploadPicker";
 
 import styles from "./signup.module.css";
@@ -95,6 +96,7 @@ export function SignupFlow() {
           displayName,
           channelUrl,
           captionPreset,
+          timezone: resolvedCreatorTimezone(),
         }),
       });
       const body = (await response.json().catch(() => null)) as

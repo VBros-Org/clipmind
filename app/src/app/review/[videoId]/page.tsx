@@ -32,7 +32,11 @@ export default async function ReviewVideoPage({ params }: ReviewVideoPageProps) 
   }
 
   return (
-    <AppShell activeTab="review" reviewCount={frame.reviewCount}>
+    <AppShell
+      activeTab="review"
+      pushNudgesEnabled={frame.pushNudgesEnabled}
+      reviewCount={frame.reviewCount}
+    >
       <section className={styles.pageStack}>
         <header className={styles.header}>
           <Link className={styles.emptyAction} href="/review">

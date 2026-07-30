@@ -1,12 +1,15 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { prisma } from "../../../lib/db";
 import {
   CREATOR_ACCESS_COOKIE,
   CREATOR_ACCESS_COOKIE_MAX_AGE_SECONDS,
   loadCreatorSessionForAccessCode,
   normalizeAccessCode,
 } from "../../../lib/review-auth";
+import { normalizeCreatorTimezone } from "../../../lib/timezone";
+import { TimezoneInput } from "../TimezoneInput";
 
 import styles from "./login.module.css";
 
@@ -25,6 +28,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
         <h1 className={styles.title}>ClipMind</h1>
         <p className={styles.copy}>Enter your creator code to open ClipMind.</p>
         <form action={loginCreator} className={styles.form}>
+          <TimezoneInput />
           <label className={styles.label}>
             Creator code
             <input
@@ -54,6 +58,18 @@ async function loginCreator(formData: FormData) {
   const session = await loadCreatorSessionForAccessCode(accessCode);
   if (!session) {
     redirect("/login?error=1");
+  }
+
+  const timezone = normalizeCreatorTimezone(String(formData.get("timezone") ?? ""));
+  if (timezone) {
+    await prisma.creator.update({
+      where: {
+        id: session.creatorId,
+      },
+      data: {
+        timezone,
+      },
+    });
   }
 
   const cookieStore = await cookies();

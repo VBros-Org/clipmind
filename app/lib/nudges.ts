@@ -6,6 +6,7 @@ import {
   failedUploadNudgeTitle,
   failedUploadTitle,
 } from "./upload-stage-copy";
+import { formatCreatorLocalTime } from "./timezone";
 
 export const RUNWAY_WARNING_THRESHOLD_DAYS = DEFAULT_RUNWAY_THRESHOLD_DAYS;
 
@@ -39,6 +40,7 @@ export type NudgeSchedule = {
 
 export type NudgeCreatorState = {
   id: string;
+  timezone?: string | null;
   reviewCount: number;
   queuedClipCount: number;
   schedule: NudgeSchedule;
@@ -119,7 +121,7 @@ export type HomeNudgeInput = {
   dueClip:
     | {
         clipId: string;
-        timeLabel: string;
+        timeLabel: string | null;
         isDue: boolean;
       }
     | null
@@ -225,7 +227,9 @@ export function computeDueNudges(
 
   if (schedule?.postTimeNudges !== false) {
     for (const clip of dueScheduledClips(creator.scheduledClips, now)) {
-      nudges.push(postNudge(clip.id, formatHourMinute(clip.scheduledFor)));
+      nudges.push(
+        postNudge(clip.id, formatHourMinute(clip.scheduledFor, creator.timezone)),
+      );
     }
   }
 
@@ -270,13 +274,11 @@ export function utcDateKey(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
-export function formatHourMinute(date: Date): string {
-  assertValidDate(date, "date");
-  return new Intl.DateTimeFormat("en", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date);
+export function formatHourMinute(
+  date: Date,
+  timezone: string | null | undefined,
+): string | null {
+  return formatCreatorLocalTime(date, timezone);
 }
 
 function reviewNudge(reviewCount: number, dedupeKey: string): DueNudge {
@@ -326,16 +328,20 @@ function runwayNudge(
   };
 }
 
-function postNudge(clipId: string, timeLabel: string): DueNudge {
+function postNudge(clipId: string, timeLabel: string | null): DueNudge {
   const href = `/home?post=${encodeURIComponent(clipId)}`;
-  const title = `Clip scheduled for ${timeLabel} is ready. Post it now.`;
+  const title = timeLabel
+    ? `Clip scheduled for ${timeLabel} is ready. Post it now.`
+    : "Clip is ready. Post it now.";
 
   return {
     id: `post:${clipId}`,
     kind: "post",
     dedupeKey: clipId,
     title,
-    notificationTitle: `Your ${timeLabel} clip is ready to post`,
+    notificationTitle: timeLabel
+      ? `Your ${timeLabel} clip is ready to post`
+      : "Your clip is ready to post",
     body: "Open ClipMind, save the clip and caption, then mark it posted.",
     href,
     data: {

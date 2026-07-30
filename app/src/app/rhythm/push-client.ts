@@ -7,6 +7,7 @@ import {
   isSupported,
   type Messaging,
 } from "firebase/messaging";
+import type { PushNotificationPermission } from "../../../lib/push-health";
 
 type SubscribeResult = {
   token: string;
@@ -80,7 +81,15 @@ export async function subscribeToPushNudges(
 }
 
 export function hasGrantedPushPermission(): boolean {
-  return "Notification" in window && Notification.permission === "granted";
+  return notificationPermissionState() === "granted";
+}
+
+export function notificationPermissionState(): PushNotificationPermission {
+  if (!("Notification" in window)) {
+    return "unsupported";
+  }
+
+  return Notification.permission;
 }
 
 async function loadMessaging(): Promise<Messaging | null> {

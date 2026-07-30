@@ -127,6 +127,7 @@ test("signup completion returns access code once and sets creator session cookie
           displayName: "Judge Creator",
           channelUrl: "https://example.com/judge",
           captionPreset: "karaoke",
+          timezone: "Asia/Bangkok",
         },
         {
           cookie: `${SIGNUP_CREATOR_COOKIE}=${encodeURIComponent(creatorId)}`,
@@ -168,6 +169,7 @@ test("signup completion returns access code once and sets creator session cookie
         channelUrl: true,
         captionStyle: true,
         mindStage: true,
+        timezone: true,
       },
     });
     assert.equal(creator.displayName, "Judge Creator");
@@ -175,6 +177,7 @@ test("signup completion returns access code once and sets creator session cookie
     assert.deepEqual(creator.captionStyle, {
       preset: "karaoke",
     });
+    assert.equal(creator.timezone, "Asia/Bangkok");
     assert.equal(creator.mindStage, "pending");
   } finally {
     await cleanupSignupFixture(fixture);

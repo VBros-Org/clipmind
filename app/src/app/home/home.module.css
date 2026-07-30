@@ -342,6 +342,25 @@
   background: color-mix(in srgb, var(--cm-surface-raised) 88%, var(--cm-red));
 }
 
+.pushHealthCard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--cm-space-3);
+  align-items: center;
+  border: var(--cm-border-width) solid
+    color-mix(in srgb, var(--cm-amber) 72%, var(--cm-border));
+  border-radius: var(--cm-radius-card);
+  background: color-mix(in srgb, var(--cm-surface-raised) 88%, var(--cm-amber));
+  padding: var(--cm-card-padding);
+}
+
+.pushHealthLink {
+  min-width: 0;
+  color: var(--cm-text);
+  font-weight: 900;
+  line-height: var(--cm-line-body);
+}
+
 .nudgeLink {
   min-width: 0;
   color: var(--cm-text);

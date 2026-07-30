@@ -20,7 +20,11 @@ export default async function UploadPage() {
   ]);
 
   return (
-    <AppShell activeTab="upload" reviewCount={frame.reviewCount}>
+    <AppShell
+      activeTab="upload"
+      pushNudgesEnabled={frame.pushNudgesEnabled}
+      reviewCount={frame.reviewCount}
+    >
       <section className={styles.stack}>
         <header className={styles.header}>
           <p className={styles.eyebrow}>Upload</p>
