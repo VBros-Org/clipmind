@@ -56,7 +56,8 @@
 
 .form,
 .accessStep,
-.corpusStep {
+.corpusStep,
+.signedInCard {
   display: grid;
   gap: var(--cm-space-4);
   border: var(--cm-border-width) solid var(--cm-border);
@@ -205,6 +206,13 @@
   margin: 0;
   color: var(--cm-text-soft);
   font-size: var(--cm-font-body);
+}
+
+.signedInMessage {
+  margin: 0;
+  color: var(--cm-text-soft);
+  font-size: var(--cm-font-body);
+  line-height: var(--cm-line-body);
 }
 
 .accessCode {
