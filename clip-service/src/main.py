@@ -30,8 +30,17 @@ from .render import (
 )
 from .subtitles import transcript_for_cut, transcript_from_payload
 from .transcribe import Transcript, probe_video_duration_ms, transcribe_video
+from .youtube import (
+    YoutubeBlockedError,
+    YoutubeDurationError,
+    YoutubeRemoteError,
+    YoutubeValidationError,
+    download_youtube_audio,
+    list_youtube_channel_uploads,
+)
 
 MAX_DOWNLOAD_BYTES = 1_000_000_000
+MAX_REMOTE_TRANSCRIBE_DURATION_S = 1_200
 
 
 @asynccontextmanager
@@ -122,6 +131,66 @@ async def transcribe(
         temp_dir = Path(raw_temp_dir)
         video_path = await _materialize_video_input(request, temp_dir)
         duration_ms = probe_video_duration_ms(video_path)
+        transcript = transcribe_video(
+            video_path,
+            settings.openai_api_key,
+            temp_dir,
+            duration_ms,
+        )
+
+    return _transcript_to_response(transcript)
+
+
+@app.post("/channel-list")
+async def channel_list(
+    request: Request,
+    _: None = Depends(_require_service_token),
+) -> dict[str, object]:
+    payload = await _json_payload(request)
+    channel_url = _required_text(payload, "channel_url")
+
+    try:
+        videos = list_youtube_channel_uploads(channel_url, limit=10)
+    except YoutubeValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except YoutubeBlockedError as exc:
+        raise _yt_blocked_http_exception() from exc
+    except YoutubeRemoteError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return {
+        "videos": [video.to_response() for video in videos],
+    }
+
+
+@app.post("/transcribe-remote")
+async def transcribe_remote(
+    request: Request,
+    _: None = Depends(_require_service_token),
+) -> dict[str, object]:
+    settings = get_settings()
+    payload = await _json_payload(request)
+    video_url = _required_text(payload, "video_url")
+    max_duration_s = _remote_duration_cap(payload)
+
+    with tempfile.TemporaryDirectory(prefix="clipmind-remote-transcribe-") as raw_temp_dir:
+        temp_dir = Path(raw_temp_dir)
+        try:
+            video_path = download_youtube_audio(video_url, temp_dir, max_duration_s)
+        except YoutubeValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except YoutubeDurationError as exc:
+            raise _duration_cap_http_exception(exc) from exc
+        except YoutubeBlockedError as exc:
+            raise _yt_blocked_http_exception() from exc
+        except YoutubeRemoteError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        duration_ms = probe_video_duration_ms(video_path)
+        if duration_ms > max_duration_s * 1000:
+            raise _duration_cap_http_exception(
+                YoutubeDurationError(round(duration_ms / 1000), max_duration_s)
+            )
         transcript = transcribe_video(
             video_path,
             settings.openai_api_key,
@@ -262,6 +331,17 @@ async def _materialize_video_input(request: Request, temp_dir: Path) -> Path:
         status_code=415,
         detail="Send multipart/form-data with file, or JSON with source_url.",
     )
+
+
+async def _json_payload(request: Request) -> Mapping[str, Any]:
+    content_type = request.headers.get("content-type", "").lower()
+    if not content_type.startswith("application/json"):
+        raise HTTPException(status_code=415, detail="Send application/json.")
+
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="JSON body must be an object.")
+    return payload
 
 
 async def _save_upload(request: Request, temp_dir: Path) -> Path:
@@ -470,6 +550,42 @@ def _parse_int(raw_value: Any, field_name: str) -> int:
         return int(raw_value)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=f"{field_name} must be an integer.") from exc
+
+
+def _remote_duration_cap(payload: Mapping[str, Any]) -> int:
+    raw_value = _field_value(payload, ("max_duration_s",))
+    if raw_value is None or raw_value == "":
+        return MAX_REMOTE_TRANSCRIBE_DURATION_S
+
+    value = _parse_int(raw_value, "max_duration_s")
+    if value <= 0:
+        raise HTTPException(status_code=422, detail="max_duration_s must be positive.")
+    return min(value, MAX_REMOTE_TRANSCRIBE_DURATION_S)
+
+
+def _duration_cap_http_exception(error: YoutubeDurationError) -> HTTPException:
+    return HTTPException(
+        status_code=422,
+        detail={
+            "code": "duration_over_cap",
+            "message": (
+                "Video is too long for remote transcription. "
+                "Upload long VODs instead."
+            ),
+            "duration_s": error.duration_s,
+            "max_duration_s": error.max_duration_s,
+        },
+    )
+
+
+def _yt_blocked_http_exception() -> HTTPException:
+    return HTTPException(
+        status_code=502,
+        detail={
+            "code": "yt_blocked",
+            "message": "YouTube blocked this server request.",
+        },
+    )
 
 
 def _download_source_url(source_url: str, temp_dir: Path) -> Path:

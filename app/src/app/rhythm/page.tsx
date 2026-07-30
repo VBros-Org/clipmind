@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { loadAppFrameData, loadRhythmOverview } from "../../../lib/app-overview";
+import { channelPullStatusResponse } from "../../../lib/channelPull";
 import { CREATOR_ACCESS_COOKIE } from "../../../lib/review-auth";
 import { DEFAULT_SCHEDULE_SETTINGS } from "../../../lib/schedule-settings";
 import { AppShell } from "../AppShell";
@@ -52,6 +53,11 @@ export default async function RhythmPage({ searchParams }: RhythmPageProps) {
           hasMind={overview.creator.hasMind}
           initialCaptionCorpus={overview.creator.captionCorpus}
           initialCaptionCount={overview.creator.captionCount}
+          initialChannelPullStatus={channelPullStatusResponse(
+            overview.creator.channelPullStage,
+            overview.creator.channelPullError,
+          )}
+          initialChannelUrl={overview.creator.channelUrl ?? ""}
         />
 
         <section className={styles.accountCard} aria-labelledby="account-title">

@@ -245,6 +245,11 @@
   gap: var(--cm-space-3);
 }
 
+.channelPullForm {
+  display: grid;
+  gap: var(--cm-space-3);
+}
+
 .captionCorpusFooter {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

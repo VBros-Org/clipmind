@@ -90,6 +90,8 @@ export type RhythmOverview = {
     captionPreset: string;
     captionCorpus: string;
     captionCount: number;
+    channelPullStage: string | null;
+    channelPullError: string | null;
     hasMind: boolean;
   };
 };
@@ -435,6 +437,8 @@ export async function loadRhythmOverview(
       channelUrl: true,
       captionStyle: true,
       captionCorpus: true,
+      channelPullStage: true,
+      channelPullError: true,
       mindId: true,
       schedule: {
         select: {
@@ -460,6 +464,8 @@ export async function loadRhythmOverview(
       captionPreset: captionPresetFromStyle(creator.captionStyle),
       captionCorpus: corpus.captionCorpus,
       captionCount: corpus.captionCount,
+      channelPullStage: creator.channelPullStage,
+      channelPullError: creator.channelPullError,
       hasMind: Boolean(creator.mindId?.trim()),
     },
   };
