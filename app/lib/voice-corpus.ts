@@ -211,7 +211,7 @@ export function buildVoiceReseedAlias(creatorId: string, now: Date): string {
   return `clipmind-voice-${shortCreatorId}-${stamp}`.slice(0, 64);
 }
 
-function loadCreatorTranscriptEvidence(
+export function loadCreatorTranscriptEvidence(
   db: PrismaClient,
   creatorId: string,
 ): Promise<WeightedTranscript[]> {

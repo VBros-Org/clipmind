@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -9,29 +9,76 @@ import {
   capCaptionCorpusInput,
   countCaptionCorpusLines,
 } from "../../../lib/caption-corpus";
+import {
+  fetchChannelPullStatus,
+  startChannelPull,
+} from "../../../lib/channel-pull-client";
+import {
+  channelPullProgressLine,
+  isActiveChannelPullStage,
+  type ChannelPullStatusView,
+} from "../../../lib/channel-pull-status";
 
 import styles from "./rhythm.module.css";
 
 type VoiceCardProps = {
   initialCaptionCorpus: string;
   initialCaptionCount: number;
+  initialChannelUrl: string;
+  initialChannelPullStatus: ChannelPullStatusView;
   hasMind: boolean;
 };
 
 type VoiceSaveState = "idle" | "teaching" | "saved" | "error";
+type ChannelPullSaveState = "idle" | "pulling" | "error";
+const CHANNEL_PULL_POLL_MS = 3_000;
 
 export function VoiceCard({
   initialCaptionCorpus,
   initialCaptionCount,
+  initialChannelUrl,
+  initialChannelPullStatus,
   hasMind,
 }: VoiceCardProps) {
   const router = useRouter();
   const [captionCorpus, setCaptionCorpus] = useState(initialCaptionCorpus);
   const [captionCount, setCaptionCount] = useState(initialCaptionCount);
+  const [channelUrl, setChannelUrl] = useState(initialChannelUrl);
+  const [channelPullStatus, setChannelPullStatus] = useState(
+    initialChannelPullStatus,
+  );
+  const [channelPullState, setChannelPullState] =
+    useState<ChannelPullSaveState>("idle");
   const [saveState, setSaveState] = useState<VoiceSaveState>("idle");
   const [confirmation, setConfirmation] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const liveCaptionCount = countCaptionCorpusLines(captionCorpus);
+  const channelPullLine = channelPullProgressLine(channelPullStatus);
+
+  useEffect(() => {
+    if (!isActiveChannelPullStage(channelPullStatus.stage)) {
+      if (channelPullState === "pulling") {
+        setChannelPullState("idle");
+        router.refresh();
+      }
+      return;
+    }
+
+    let cancelled = false;
+    async function poll() {
+      const status = await fetchChannelPullStatus();
+      if (!cancelled && status) {
+        setChannelPullStatus(status);
+      }
+    }
+
+    void poll();
+    const interval = window.setInterval(poll, CHANNEL_PULL_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [channelPullState, channelPullStatus.stage, router]);
 
   async function teachMind() {
     setSaveState("teaching");
@@ -73,6 +120,23 @@ export function VoiceCard({
     }
   }
 
+  async function pullChannel() {
+    setChannelPullState("pulling");
+    setConfirmation(null);
+    setError(null);
+
+    try {
+      const result = await startChannelPull(channelUrl);
+      setChannelPullStatus(result);
+      if (result.channelUrl) {
+        setChannelUrl(result.channelUrl);
+      }
+    } catch (requestError) {
+      setChannelPullState("error");
+      setError(errorMessage(requestError));
+    }
+  }
+
   return (
     <section
       className={styles.card}
@@ -98,6 +162,45 @@ export function VoiceCard({
           ? `Your Mind knows ${captionCount} of your captions.`
           : "No pasted captions saved yet."}
       </p>
+      <div className={styles.voiceChannelBlock}>
+        <label className={styles.voiceLabel}>
+          YouTube channel
+          <input
+            className={styles.voiceInput}
+            data-testid="voice-channel-input"
+            inputMode="url"
+            onChange={(event) => setChannelUrl(event.target.value)}
+            placeholder="@yourhandle or youtube.com/@yourhandle"
+            value={channelUrl}
+          />
+        </label>
+        <button
+          className={styles.teachButton}
+          data-testid="pull-channel-button"
+          disabled={
+            !channelUrl.trim() ||
+            channelPullState === "pulling" ||
+            isActiveChannelPullStage(channelPullStatus.stage)
+          }
+          onClick={pullChannel}
+          type="button"
+        >
+          Pull my recent videos
+        </button>
+        {channelPullLine ? (
+          <p
+            className={
+              channelPullStatus.stage === "failed"
+                ? styles.voiceError
+                : styles.voiceConfirmation
+            }
+            data-testid="channel-pull-progress"
+            role={channelPullStatus.stage === "failed" ? "alert" : undefined}
+          >
+            {channelPullLine}
+          </p>
+        ) : null}
+      </div>
       <label className={styles.voiceLabel}>
         Paste a few recent captions
         <textarea

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import {
   MAX_CAPTION_CORPUS_CHARS,
@@ -9,6 +9,15 @@ import {
   capCaptionCorpusInput,
   countCaptionCorpusLines,
 } from "../../../lib/caption-corpus";
+import {
+  fetchChannelPullStatus,
+  startChannelPull,
+} from "../../../lib/channel-pull-client";
+import {
+  channelPullProgressLine,
+  isActiveChannelPullStage,
+  type ChannelPullStatusView,
+} from "../../../lib/channel-pull-status";
 import { resolvedCreatorTimezone } from "../client-timezone";
 import { UploadPicker } from "../upload/UploadPicker";
 
@@ -16,6 +25,7 @@ import styles from "./signup.module.css";
 
 type SignupStep = "invite" | "profile" | "access" | "corpus";
 type SignupError = string | null;
+const CHANNEL_PULL_POLL_MS = 3_000;
 
 const CAPTION_PRESETS = [
   {
@@ -40,6 +50,16 @@ export function SignupFlow() {
   const [inviteCode, setInviteCode] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [channelUrl, setChannelUrl] = useState("");
+  const [channelPullUrl, setChannelPullUrl] = useState("");
+  const [channelPullStatus, setChannelPullStatus] =
+    useState<ChannelPullStatusView>({
+      stage: null,
+      error: null,
+      errorCode: null,
+    });
+  const [channelPullState, setChannelPullState] = useState<
+    "idle" | "pulling" | "error"
+  >("idle");
   const [captionPreset, setCaptionPreset] = useState("clean-bold");
   const [captionCorpus, setCaptionCorpus] = useState("");
   const [corpusSaveState, setCorpusSaveState] = useState<
@@ -49,6 +69,31 @@ export function SignupFlow() {
   const [error, setError] = useState<SignupError>(null);
   const [busy, setBusy] = useState(false);
   const accessCodeRef = useRef<HTMLDivElement | null>(null);
+  const channelPullLine = channelPullProgressLine(channelPullStatus);
+
+  useEffect(() => {
+    if (!isActiveChannelPullStage(channelPullStatus.stage)) {
+      if (channelPullState === "pulling") {
+        setChannelPullState("idle");
+      }
+      return;
+    }
+
+    let cancelled = false;
+    async function poll() {
+      const status = await fetchChannelPullStatus();
+      if (!cancelled && status) {
+        setChannelPullStatus(status);
+      }
+    }
+
+    void poll();
+    const interval = window.setInterval(poll, CHANNEL_PULL_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [channelPullState, channelPullStatus.stage]);
 
   async function claimInvite(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -111,6 +156,7 @@ export function SignupFlow() {
       }
 
       setAccessCode(body.accessCode);
+      setChannelPullUrl(channelUrl);
       setStep("access");
       window.setTimeout(() => accessCodeRef.current?.focus(), 0);
     } catch (requestError) {
@@ -158,6 +204,22 @@ export function SignupFlow() {
       setCorpusSaveState("saved");
     } catch (requestError) {
       setCorpusSaveState("error");
+      setError(errorMessage(requestError));
+    }
+  }
+
+  async function pullChannel() {
+    setChannelPullState("pulling");
+    setError(null);
+
+    try {
+      const result = await startChannelPull(channelPullUrl);
+      setChannelPullStatus(result);
+      if (result.channelUrl) {
+        setChannelPullUrl(result.channelUrl);
+      }
+    } catch (requestError) {
+      setChannelPullState("error");
       setError(errorMessage(requestError));
     }
   }
@@ -276,6 +338,42 @@ export function SignupFlow() {
             <Link href="/home">Do this later</Link>
           </div>
           <form className={styles.captionCorpusForm} onSubmit={saveCaptionCorpus}>
+            <div className={styles.channelPullForm}>
+              <label className={styles.label}>
+                YouTube channel
+                <input
+                  className={styles.input}
+                  inputMode="url"
+                  onChange={(event) => setChannelPullUrl(event.target.value)}
+                  placeholder="@yourhandle or youtube.com/@yourhandle"
+                  value={channelPullUrl}
+                />
+              </label>
+              <button
+                className={styles.secondaryButton}
+                disabled={
+                  !channelPullUrl.trim() ||
+                  channelPullState === "pulling" ||
+                  isActiveChannelPullStage(channelPullStatus.stage)
+                }
+                onClick={pullChannel}
+                type="button"
+              >
+                Pull my recent videos
+              </button>
+              {channelPullLine ? (
+                <p
+                  className={
+                    channelPullStatus.stage === "failed"
+                      ? styles.error
+                      : styles.savedNote
+                  }
+                  role={channelPullStatus.stage === "failed" ? "alert" : undefined}
+                >
+                  {channelPullLine}
+                </p>
+              ) : null}
+            </div>
             <label className={styles.label}>
               Paste a few recent captions
               <textarea

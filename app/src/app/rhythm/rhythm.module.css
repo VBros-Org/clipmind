@@ -74,6 +74,23 @@
   font-weight: 800;
 }
 
+.voiceChannelBlock {
+  display: grid;
+  gap: var(--cm-space-3);
+}
+
+.voiceInput {
+  width: 100%;
+  min-height: var(--cm-touch-target);
+  border: var(--cm-border-width) solid var(--cm-border-strong);
+  border-radius: var(--cm-radius-small);
+  background: var(--cm-bg-deep);
+  color: var(--cm-text);
+  font: inherit;
+  outline: none;
+  padding: var(--cm-space-3) var(--cm-space-4);
+}
+
 .voiceTextarea {
   width: 100%;
   min-height: calc(var(--cm-touch-target) * 3);
@@ -89,6 +106,11 @@
 }
 
 .voiceTextarea:focus {
+  border-color: var(--cm-accent);
+  box-shadow: 0 0 0 var(--cm-space-1) var(--cm-focus);
+}
+
+.voiceInput:focus {
   border-color: var(--cm-accent);
   box-shadow: 0 0 0 var(--cm-space-1) var(--cm-focus);
 }
