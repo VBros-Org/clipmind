@@ -145,18 +145,21 @@ Out of scope for the whole sprint (do not creep): auto-posting, GPU/vision candi
 
 ## Deferred items (log here during the loop, do not do them)
 
-- (empty at open)
+- Access-code hashing + server session ids (plaintext documented as jam decision, revisit pre-public-launch)
+- Media presigning (public-by-link recorded as jam decision)
+- Branch protection (plan-gated: private repo on Free org needs GitHub Pro or public)
+- Full-pipeline E2E in CI (upload/clip-service/Minds/OpenAI deliberately excluded from the Playwright smoke)
 
-## Scorecard (fill at close)
+## Scorecard (closed 2026-08-14)
 
 - Planned tickets: 15 (T1–T15)
-- Shipped:
-- Loop iterations:
-- Reworked/reopened:
-- Human unblocks needed:
-- Post-sprint defects:
-- Wall clock:
-- Lessons → loop-food system note:
+- Shipped: 15 (100%), PRs #72–#86, every ticket deployed to Railway same-day
+- Loop iterations: 15 productive turns (one Codex leg per ticket T1–T14, T15 built by the loop driver; plus live proofs: T4 prod pause/resume, T6 120MB direct-R2 upload, T8 karaoke frame check, T13 CSP browser pass)
+- Reworked/reopened: 0 tickets reopened; 5 defects caught and fixed during blind verification before merge (T1 P2002-inside-transaction poisoning the tick, T3 guard-message regex, T5 cookie roll unreachable by normal activity, T13 CSP missing the presigned-sources origin which would have killed preview playback AND multipart uploads, T14 strict-mode locator + 10 ruff findings)
+- Human unblocks needed: 0 (one environmental stall: a 1h+ network outage wedged a background railway CLI verifier that had no timeout; Codex leg survived on retries)
+- Post-sprint defects: none known yet; George phone pass still owed
+- Wall clock: opened ~10:45, closed ~17:45 (+07), ~7h including the outage
+- Lessons → loop-food system note: (1) pre-create the branch for Codex legs — the sandbox cannot write .git and a branch-first instruction stalls the whole leg; (2) Codex sandbox also cannot reach localhost TCP — DB suites are ALWAYS the operator's verification half; (3) never run railway CLI in a background verifier without a hard timeout; (4) blind verification earns its cost — 5 pre-merge catches this sprint, two of them prod-breaking.
 
 ## Loop lessons carried in (from Agefall sprint-0)
 
