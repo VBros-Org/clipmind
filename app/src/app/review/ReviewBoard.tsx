@@ -39,6 +39,8 @@ export type ReviewClipView = {
   startMs: number;
   endMs: number;
   renderedUrl: string | null;
+  renderFailedAt: string | null;
+  renderError: string | null;
   thumbUrl: string | null;
   postCopyVariants: PostCopyVariants | null;
   transcript: string | null;
@@ -466,6 +468,7 @@ function ClipCard({
   undoReject: (clipId: string) => void;
 }) {
   const isRendering = isRenderPending(clip);
+  const renderFailed = Boolean(clip.renderFailedAt);
   const isRejected = clip.status === "rejected";
   const isPendingReject = pendingReject !== null;
 
@@ -498,6 +501,9 @@ function ClipCard({
             {formatDuration(clip.startMs, clip.endMs)}
           </span>
           {isRendering ? <span className={styles.renderChip}>rendering</span> : null}
+          {renderFailed ? (
+            <span className={styles.renderFailedChip}>render failed</span>
+          ) : null}
         </span>
         <span className={styles.cardReason}>
           {clip.mindRankReason || "No Mind reason saved."}
@@ -580,6 +586,7 @@ function ReviewSheet({
   const [isRendering, setIsRendering] = useState(
     isRenderPending(clip),
   );
+  const [isRetryingRender, setIsRetryingRender] = useState(false);
   const [copyState, setCopyState] = useState<Platform | null>(null);
   const [preview, setPreview] = useState<PreviewPayload | null>(null);
   const [previewFailed, setPreviewFailed] = useState(false);
@@ -592,7 +599,7 @@ function ReviewSheet({
   useEffect(() => {
     setIsRendering(isRenderPending(clip));
     setCopyState(null);
-  }, [clip.id, clip.renderedUrl, clip.status]);
+  }, [clip.id, clip.renderFailedAt, clip.renderedUrl, clip.status]);
 
   useEffect(() => {
     setLearningNote(false);
@@ -636,7 +643,7 @@ function ReviewSheet({
   }, [clip.id, clip.renderedUrl]);
 
   useEffect(() => {
-    if (!isRendering || clip.renderedUrl) {
+    if (!isRendering || clip.renderedUrl || clip.renderFailedAt) {
       return;
     }
 
@@ -653,7 +660,7 @@ function ReviewSheet({
       const nextClip = (await response.json()) as ReviewClipView;
       if (!cancelled) {
         updateClip(nextClip);
-        if (nextClip.renderedUrl) {
+        if (nextClip.renderedUrl || nextClip.renderFailedAt) {
           setIsRendering(false);
           window.clearInterval(interval);
         }
@@ -664,7 +671,7 @@ function ReviewSheet({
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [clip.id, clip.renderedUrl, isRendering, updateClip]);
+  }, [clip.id, clip.renderFailedAt, clip.renderedUrl, isRendering, updateClip]);
 
   async function acceptClip() {
     setIsBusy(true);
@@ -682,7 +689,9 @@ function ReviewSheet({
         rendering: boolean;
       };
       updateClip(body.clip);
-      setIsRendering(body.rendering && !body.clip.renderedUrl);
+      setIsRendering(
+        body.rendering && !body.clip.renderedUrl && !body.clip.renderFailedAt,
+      );
       setLearningNote(true);
     } finally {
       setIsBusy(false);
@@ -692,6 +701,30 @@ function ReviewSheet({
   function rejectClip() {
     setIsRendering(false);
     deferReject(clip);
+  }
+
+  async function retryRender() {
+    setIsRetryingRender(true);
+    try {
+      const response = await fetch(`/api/clips/${clip.id}/render/retry`, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        return;
+      }
+
+      const body = (await response.json()) as {
+        clip: ReviewClipView;
+        rendering: boolean;
+      };
+      updateClip(body.clip);
+      setIsRendering(
+        body.rendering && !body.clip.renderedUrl && !body.clip.renderFailedAt,
+      );
+    } finally {
+      setIsRetryingRender(false);
+    }
   }
 
   function seekToStart() {
@@ -769,6 +802,21 @@ function ReviewSheet({
         </div>
 
         <p className={styles.transcript}>{transcriptLine(clip.transcript)}</p>
+        {clip.renderFailedAt ? (
+          <div className={styles.renderErrorPanel}>
+            <p>
+              {clip.renderError?.trim() || "Render failed. Try again."}
+            </p>
+            <button
+              className={styles.retryRenderButton}
+              disabled={isRetryingRender}
+              onClick={retryRender}
+              type="button"
+            >
+              {isRetryingRender ? "Retrying" : "Retry render"}
+            </button>
+          </div>
+        ) : null}
         <blockquote className={styles.reasonQuote}>
           {clip.mindRankReason || "No Mind reason saved."}
         </blockquote>
@@ -907,6 +955,10 @@ function statusLabel(
     return "rendering";
   }
 
+  if (clip.renderFailedAt) {
+    return "render failed";
+  }
+
   if (clip.rejectReason) {
     return `rejected: ${clip.rejectReason}`;
   }
@@ -918,10 +970,13 @@ function statusLabel(
   return clip.status;
 }
 
-function isRenderPending(clip: Pick<ReviewClipView, "status" | "renderedUrl">): boolean {
+function isRenderPending(
+  clip: Pick<ReviewClipView, "status" | "renderedUrl" | "renderFailedAt">,
+): boolean {
   return (
     (clip.status === "accepted" || clip.status === "scheduled") &&
-    !clip.renderedUrl
+    !clip.renderedUrl &&
+    !clip.renderFailedAt
   );
 }
 

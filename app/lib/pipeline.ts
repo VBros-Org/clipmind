@@ -1,4 +1,4 @@
-import type { PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 
 import {
   captionClip,
@@ -218,6 +218,14 @@ export async function runPipeline(
       }
     }
 
+    await captionAcceptedClipsMissingPostCopy(
+      db,
+      video.id,
+      video.creatorId,
+      captionImpl,
+      options,
+      captionedClipIds,
+    );
     await setPipelineStage(db, video.id, "done", options);
     await runSchedulePass(video.creatorId, new Date(), {
       prismaClient: db,
@@ -438,6 +446,49 @@ async function loadTopRankedCandidateClips(
       id: true,
     },
   });
+}
+
+async function captionAcceptedClipsMissingPostCopy(
+  db: PrismaClient,
+  videoId: string,
+  creatorId: string,
+  captionImpl: CaptionClipImpl,
+  options: PipelineOptions,
+  captionedClipIds: string[],
+): Promise<void> {
+  const clips = await db.clip.findMany({
+    where: {
+      videoId,
+      creatorId,
+      status: "accepted",
+      postCopyVariants: {
+        equals: Prisma.AnyNull,
+      },
+    },
+    orderBy: [
+      {
+        mindRank: "asc",
+      },
+      {
+        createdAt: "asc",
+      },
+      {
+        id: "asc",
+      },
+    ],
+    select: {
+      id: true,
+    },
+  });
+
+  for (const clip of clips) {
+    const captionResult = await captionImpl(clip.id, {
+      ...options.captionOptions,
+      prismaClient: db,
+    });
+    assertCaptioned(captionResult, clip.id);
+    captionedClipIds.push(clip.id);
+  }
 }
 
 function assertCaptioned(result: CaptionClipResult, clipId: string): void {

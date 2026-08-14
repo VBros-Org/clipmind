@@ -25,6 +25,8 @@ export type RenderClipOptions = {
   storage?: Pick<R2Storage, "presignSourceUrl" | "uploadRender">;
 };
 
+const MAX_RENDER_ERROR_LENGTH = 500;
+
 export async function renderClip(
   clipId: string,
   presetId: string,
@@ -51,57 +53,95 @@ export async function renderClip(
   if (!clip) {
     throw new Error(`Clip ${clipId} does not exist.`);
   }
-  if (!clip.video.sourceKey) {
-    throw new Error(`Video ${clip.videoId} has no sourceKey for rendering.`);
-  }
-
-  const sourceUrl = await storage.presignSourceUrl(clip.video.sourceKey);
-  const response = await fetchImpl(clipServiceCutEndpoint().toString(), {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${env.CLIP_SERVICE_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      source_url: sourceUrl,
-      start_ms: clip.startMs,
-      end_ms: clip.endMs,
-      trim_start_ms: clip.trimStartMs ?? 0,
-      trim_end_ms: clip.trimEndMs ?? 0,
-      preset_id: presetId,
-      transcript: clip.transcript ?? undefined,
-    }),
-  });
-
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(
-      `Clip service /cut failed with ${response.status}: ${detail.slice(0, 500)}`,
-    );
-  }
-  if (!response.body) {
-    throw new Error("Clip service /cut returned an empty response body.");
-  }
-
-  const renderedUrl = await storage.uploadRender(
-    clip.id,
-    await responseBodyToUploadBody(response.body),
-  );
 
   await db.clip.update({
     where: {
       id: clip.id,
     },
     data: {
-      renderedUrl,
+      renderFailedAt: null,
+      renderError: null,
     },
   });
 
-  return {
-    clipId: clip.id,
-    videoId: clip.videoId,
-    renderedUrl,
-  };
+  try {
+    if (!clip.video.sourceKey) {
+      throw new Error(`Video ${clip.videoId} has no sourceKey for rendering.`);
+    }
+
+    const sourceUrl = await storage.presignSourceUrl(clip.video.sourceKey);
+    const response = await fetchImpl(clipServiceCutEndpoint().toString(), {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.CLIP_SERVICE_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        source_url: sourceUrl,
+        start_ms: clip.startMs,
+        end_ms: clip.endMs,
+        trim_start_ms: clip.trimStartMs ?? 0,
+        trim_end_ms: clip.trimEndMs ?? 0,
+        preset_id: presetId,
+        transcript: clip.transcript ?? undefined,
+      }),
+    });
+
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(
+        `Clip service /cut failed with ${response.status}: ${detail.slice(0, 500)}`,
+      );
+    }
+    if (!response.body) {
+      throw new Error("Clip service /cut returned an empty response body.");
+    }
+
+    const renderedUrl = await storage.uploadRender(
+      clip.id,
+      await responseBodyToUploadBody(response.body),
+    );
+
+    await db.clip.update({
+      where: {
+        id: clip.id,
+      },
+      data: {
+        renderedUrl,
+        renderFailedAt: null,
+        renderError: null,
+      },
+    });
+
+    return {
+      clipId: clip.id,
+      videoId: clip.videoId,
+      renderedUrl,
+    };
+  } catch (error) {
+    await markClipRenderFailed(clip.id, error, {
+      prismaClient: db,
+    });
+    throw error;
+  }
+}
+
+export async function markClipRenderFailed(
+  clipId: string,
+  error: unknown,
+  options: Pick<RenderClipOptions, "prismaClient"> = {},
+): Promise<void> {
+  const db = options.prismaClient ?? prisma;
+
+  await db.clip.updateMany({
+    where: {
+      id: clipId,
+    },
+    data: {
+      renderFailedAt: new Date(),
+      renderError: renderErrorMessage(error),
+    },
+  });
 }
 
 function clipServiceCutEndpoint(): URL {
@@ -115,4 +155,11 @@ async function responseBodyToUploadBody(
   body: ReadableStream<Uint8Array>,
 ): Promise<StorageUploadBody> {
   return Buffer.from(await new Response(body).arrayBuffer());
+}
+
+function renderErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return (message || "Render failed.")
+    .replace(/\s+/g, " ")
+    .slice(0, MAX_RENDER_ERROR_LENGTH);
 }

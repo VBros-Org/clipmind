@@ -171,6 +171,7 @@
 .rankBadge,
 .durationChip,
 .renderChip,
+.renderFailedChip,
 .cardStatus {
   display: inline-flex;
   align-items: center;
@@ -208,6 +209,16 @@
   min-height: var(--cm-space-5);
   background: var(--cm-amber);
   color: var(--cm-ink);
+  padding-inline: var(--cm-space-2);
+}
+
+.renderFailedChip {
+  position: absolute;
+  inset-inline-start: var(--cm-space-2);
+  inset-block-end: var(--cm-space-2);
+  min-height: var(--cm-space-5);
+  background: var(--cm-red);
+  color: var(--cm-text);
   padding-inline: var(--cm-space-2);
 }
 
@@ -442,6 +453,40 @@
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.renderErrorPanel {
+  display: grid;
+  gap: var(--cm-space-3);
+  border: var(--cm-border-width) solid var(--cm-red);
+  border-radius: var(--cm-radius-card);
+  background: color-mix(in srgb, var(--cm-red) 12%, var(--cm-surface));
+  padding: var(--cm-card-padding);
+}
+
+.renderErrorPanel p {
+  margin: 0;
+  color: var(--cm-text);
+  font-size: var(--cm-font-secondary);
+  font-weight: 800;
+  line-height: var(--cm-line-body);
+}
+
+.retryRenderButton {
+  min-height: var(--cm-touch-target);
+  border: 0;
+  border-radius: var(--cm-radius-action);
+  background: var(--cm-red);
+  color: var(--cm-text);
+  cursor: pointer;
+  font-size: var(--cm-font-secondary);
+  font-weight: 900;
+  padding-inline: var(--cm-space-3);
+}
+
+.retryRenderButton:disabled {
+  cursor: wait;
+  opacity: 0.64;
 }
 
 .reasonQuote {
