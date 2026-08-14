@@ -6,14 +6,22 @@ import { prisma } from "../lib/db";
 import { cookieHeaderForAccessCode } from "../lib/review-auth";
 import {
   handleDeleteVideo,
+  handleAbortMultipartUpload,
+  handleCompleteMultipartUpload,
+  handleCreateMultipartUpload,
   handleGetRecentUploads,
+  handleGetMultipartUpload,
+  handleSignMultipartUploadParts,
   handleGetVideoStatus,
   handleRetryVideo,
   handleUploadVideo,
+  MULTIPART_PART_SIZE_BYTES,
+  type VideoApiOptions,
 } from "../lib/video-api";
 import { loadHomeOverview } from "../lib/app-overview";
 import {
   createR2Storage,
+  type SourceUploadPart,
   type R2Storage,
   type S3ClientLike,
   type StorageUploadBody,
@@ -216,6 +224,413 @@ test("recent uploads endpoint is creator scoped and no-store", async () => {
     assert.equal(body.uploads[0]?.pipelineStage, "failed");
     assert.equal(body.uploads[0]?.pipelineError, "transcribing: Whisper timeout");
     assert.equal(body.uploads[0]?.clipCount, 0);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("recent uploads endpoint returns every non-done upload, including the fourth failed video", async () => {
+  const fixture = await createFixture();
+
+  try {
+    const failedVideos = [];
+    for (let index = 0; index < 4; index += 1) {
+      failedVideos.push(
+        await createVideo(fixture, {
+          pipelineStage: "failed",
+          pipelineError: `transcribing: failure ${index + 1}`,
+          clipCount: 0,
+        }),
+      );
+    }
+    const doneVideo = await createVideo(fixture, {
+      pipelineStage: "done",
+      clipCount: 1,
+    });
+    fixture.videoId = failedVideos[0]?.id;
+
+    const response = await handleGetRecentUploads(
+      requestForPath("/api/videos/recent", fixture.creatorACode),
+    );
+    assert.equal(response.status, 200);
+
+    const body = (await response.json()) as {
+      uploads: Array<{
+        id: string;
+        pipelineStage: string;
+      }>;
+    };
+    const uploadIds = body.uploads.map((upload) => upload.id);
+    assert.equal(body.uploads.length, 4);
+    assert.equal(uploadIds.includes(failedVideos[3]?.id ?? ""), true);
+    assert.equal(uploadIds.includes(doneVideo.id), false);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("multipart upload completion reconciles R2 bytes, creates the Video row, and starts the pipeline", async () => {
+  const fixture = await createFixture();
+  const completedParts: SourceUploadPart[][] = [];
+  const runCalls: string[] = [];
+  let createdSourceKey: string | null = null;
+  const storage = multipartStorage({
+    createSourceMultipartUpload: async (input) => {
+      createdSourceKey = input.key;
+      return { uploadId: "upload-ok" };
+    },
+    listSourceUploadParts: async () => [
+      {
+        partNumber: 1,
+        size: MULTIPART_PART_SIZE_BYTES,
+        etag: "etag-1",
+      },
+      {
+        partNumber: 2,
+        size: 123,
+        etag: "etag-2",
+      },
+    ],
+    completeSourceMultipartUpload: async (input) => {
+      completedParts.push(input.parts);
+    },
+  });
+
+  try {
+    const created = await handleCreateMultipartUpload(
+      jsonRequest("/api/videos/uploads/multipart", fixture.creatorACode, {
+        fileName: "source.mp4",
+        contentType: "video/mp4",
+        size: MULTIPART_PART_SIZE_BYTES + 123,
+      }),
+      {
+        multipartStorage: storage,
+      },
+    );
+    assert.equal(created.status, 201);
+    const createdBody = (await created.json()) as {
+      intentId: string;
+      partSizeBytes: number;
+    };
+    assert.equal(createdBody.partSizeBytes, MULTIPART_PART_SIZE_BYTES);
+
+    const response = await handleCompleteMultipartUpload(
+      requestForPath(
+        `/api/videos/uploads/multipart/${createdBody.intentId}/complete`,
+        fixture.creatorACode,
+        "POST",
+      ),
+      { id: createdBody.intentId },
+      {
+        multipartStorage: storage,
+        async runPipelineImpl(videoId) {
+          runCalls.push(videoId);
+          return {
+            status: "done",
+            videoId,
+            creatorId: fixture.creatorAId,
+            clipCount: 0,
+            captionedClipIds: [],
+          };
+        },
+      },
+    );
+
+    assert.equal(response.status, 202);
+    const body = (await response.json()) as {
+      videoId: string;
+      stage: string;
+      bytes: number;
+    };
+    fixture.videoId = body.videoId;
+    assert.equal(body.stage, "uploaded");
+    assert.equal(body.bytes, MULTIPART_PART_SIZE_BYTES + 123);
+    assert.deepEqual(runCalls, [body.videoId]);
+    assert.equal(createdSourceKey, `videos/${body.videoId}/source.mp4`);
+    assert.deepEqual(completedParts, [
+      [
+        {
+          partNumber: 1,
+          size: MULTIPART_PART_SIZE_BYTES,
+          etag: "etag-1",
+        },
+        {
+          partNumber: 2,
+          size: 123,
+          etag: "etag-2",
+        },
+      ],
+    ]);
+
+    const video = await prisma.video.findUniqueOrThrow({
+      where: {
+        id: body.videoId,
+      },
+      select: {
+        creatorId: true,
+        sourceKey: true,
+        contentKey: true,
+        pipelineStage: true,
+      },
+    });
+    assert.equal(video.creatorId, fixture.creatorAId);
+    assert.equal(video.sourceKey, `videos/${body.videoId}/source.mp4`);
+    assert.equal(video.contentKey, `uploaded:${fixture.creatorAId}:${body.videoId}`);
+    assert.equal(video.pipelineStage, "uploaded");
+
+    const intent = await prisma.uploadIntent.findUniqueOrThrow({
+      where: {
+        id: createdBody.intentId,
+      },
+      select: {
+        status: true,
+        videoId: true,
+        completedAt: true,
+      },
+    });
+    assert.equal(intent.status, "completed");
+    assert.equal(intent.videoId, body.videoId);
+    assert.notEqual(intent.completedAt, null);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("multipart completion rejects byte mismatch, aborts R2, deletes the source object, and creates no Video", async () => {
+  const fixture = await createFixture();
+  const aborts: Array<{ key: string; uploadId: string }> = [];
+  const deletedSources: string[] = [];
+  const storage = multipartStorage({
+    createSourceMultipartUpload: async () => ({ uploadId: "upload-mismatch" }),
+    listSourceUploadParts: async () => [
+      {
+        partNumber: 1,
+        size: MULTIPART_PART_SIZE_BYTES - 1,
+        etag: "etag-1",
+      },
+    ],
+    abortSourceMultipartUpload: async (input) => {
+      aborts.push(input);
+    },
+    deleteSource: async (key) => {
+      deletedSources.push(key);
+    },
+  });
+
+  try {
+    const created = await handleCreateMultipartUpload(
+      jsonRequest("/api/videos/uploads/multipart", fixture.creatorACode, {
+        fileName: "source.mp4",
+        contentType: "video/mp4",
+        size: MULTIPART_PART_SIZE_BYTES,
+      }),
+      {
+        multipartStorage: storage,
+      },
+    );
+    assert.equal(created.status, 201);
+    const createdBody = (await created.json()) as {
+      intentId: string;
+    };
+
+    const response = await handleCompleteMultipartUpload(
+      requestForPath(
+        `/api/videos/uploads/multipart/${createdBody.intentId}/complete`,
+        fixture.creatorACode,
+        "POST",
+      ),
+      { id: createdBody.intentId },
+      {
+        multipartStorage: storage,
+      },
+    );
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), {
+      error: "Uploaded part bytes do not match the declared file size.",
+    });
+    assert.equal(aborts.length, 1);
+    assert.equal(deletedSources.length, 1);
+    assert.equal(
+      await prisma.video.count({
+        where: {
+          creatorId: fixture.creatorAId,
+        },
+      }),
+      0,
+    );
+
+    const intent = await prisma.uploadIntent.findUniqueOrThrow({
+      where: {
+        id: createdBody.intentId,
+      },
+      select: {
+        status: true,
+        failureReason: true,
+        abortedAt: true,
+      },
+    });
+    assert.equal(intent.status, "failed");
+    assert.equal(
+      intent.failureReason,
+      "Uploaded part bytes do not match the declared file size.",
+    );
+    assert.notEqual(intent.abortedAt, null);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("multipart cancel aborts server-side and deletes the source object", async () => {
+  const fixture = await createFixture();
+  const aborts: Array<{ key: string; uploadId: string }> = [];
+  const deletedSources: string[] = [];
+  const storage = multipartStorage({
+    createSourceMultipartUpload: async () => ({ uploadId: "upload-cancel" }),
+    abortSourceMultipartUpload: async (input) => {
+      aborts.push(input);
+    },
+    deleteSource: async (key) => {
+      deletedSources.push(key);
+    },
+  });
+
+  try {
+    const created = await handleCreateMultipartUpload(
+      jsonRequest("/api/videos/uploads/multipart", fixture.creatorACode, {
+        fileName: "source.mp4",
+        contentType: "video/mp4",
+        size: 1024,
+      }),
+      {
+        multipartStorage: storage,
+      },
+    );
+    const createdBody = (await created.json()) as {
+      intentId: string;
+    };
+
+    const response = await handleAbortMultipartUpload(
+      requestForPath(
+        `/api/videos/uploads/multipart/${createdBody.intentId}/abort`,
+        fixture.creatorACode,
+        "POST",
+      ),
+      { id: createdBody.intentId },
+      {
+        multipartStorage: storage,
+      },
+    );
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      intentId: createdBody.intentId,
+      aborted: true,
+    });
+    assert.equal(aborts.length, 1);
+    assert.equal(deletedSources.length, 1);
+
+    const intent = await prisma.uploadIntent.findUniqueOrThrow({
+      where: {
+        id: createdBody.intentId,
+      },
+      select: {
+        status: true,
+        failureReason: true,
+        abortedAt: true,
+      },
+    });
+    assert.equal(intent.status, "aborted");
+    assert.equal(intent.failureReason, "Upload cancelled.");
+    assert.notEqual(intent.abortedAt, null);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("multipart resume endpoint re-lists uploaded parts and sign endpoint returns presigned part URLs", async () => {
+  const fixture = await createFixture();
+  const signedPartNumbers: number[] = [];
+  const storage = multipartStorage({
+    createSourceMultipartUpload: async () => ({ uploadId: "upload-resume" }),
+    listSourceUploadParts: async () => [
+      {
+        partNumber: 1,
+        size: MULTIPART_PART_SIZE_BYTES,
+        etag: "etag-1",
+      },
+    ],
+    presignSourcePartUpload: async (input) => {
+      signedPartNumbers.push(input.partNumber);
+      return `https://r2.example/part-${input.partNumber}`;
+    },
+  });
+
+  try {
+    const created = await handleCreateMultipartUpload(
+      jsonRequest("/api/videos/uploads/multipart", fixture.creatorACode, {
+        fileName: "source.mp4",
+        contentType: "video/mp4",
+        size: MULTIPART_PART_SIZE_BYTES + 5,
+      }),
+      {
+        multipartStorage: storage,
+      },
+    );
+    const createdBody = (await created.json()) as {
+      intentId: string;
+    };
+
+    const resume = await handleGetMultipartUpload(
+      requestForPath(
+        `/api/videos/uploads/multipart/${createdBody.intentId}`,
+        fixture.creatorACode,
+      ),
+      { id: createdBody.intentId },
+      {
+        multipartStorage: storage,
+      },
+    );
+
+    assert.equal(resume.status, 200);
+    const resumeBody = (await resume.json()) as {
+      uploadedParts: Array<{
+        partNumber: number;
+        size: number;
+      }>;
+    };
+    assert.deepEqual(resumeBody.uploadedParts, [
+      {
+        partNumber: 1,
+        size: MULTIPART_PART_SIZE_BYTES,
+      },
+    ]);
+
+    const signed = await handleSignMultipartUploadParts(
+      jsonRequest(
+        `/api/videos/uploads/multipart/${createdBody.intentId}/sign`,
+        fixture.creatorACode,
+        {
+          partNumbers: [2],
+        },
+      ),
+      { id: createdBody.intentId },
+      {
+        multipartStorage: storage,
+      },
+    );
+
+    assert.equal(signed.status, 200);
+    assert.deepEqual(await signed.json(), {
+      intentId: createdBody.intentId,
+      urls: [
+        {
+          partNumber: 2,
+          url: "https://r2.example/part-2",
+        },
+      ],
+    });
+    assert.deepEqual(signedPartNumbers, [2]);
   } finally {
     await cleanupFixture(fixture);
   }
@@ -764,6 +1179,13 @@ async function createVideo(
 }
 
 async function cleanupFixture(fixture: VideoApiFixture): Promise<void> {
+  await prisma.uploadIntent.deleteMany({
+    where: {
+      creatorId: {
+        in: [fixture.creatorAId, fixture.creatorBId],
+      },
+    },
+  });
   await prisma.schedule.deleteMany({
     where: {
       creatorId: {
@@ -801,6 +1223,26 @@ async function cleanupFixture(fixture: VideoApiFixture): Promise<void> {
   });
 }
 
+function multipartStorage(
+  overrides: Partial<NonNullable<VideoApiOptions["multipartStorage"]>> = {},
+): NonNullable<VideoApiOptions["multipartStorage"]> {
+  return {
+    async createSourceMultipartUpload() {
+      return { uploadId: "upload-id" };
+    },
+    async presignSourcePartUpload(input) {
+      return `https://r2.example/${input.partNumber}`;
+    },
+    async listSourceUploadParts() {
+      return [];
+    },
+    async completeSourceMultipartUpload() {},
+    async abortSourceMultipartUpload() {},
+    async deleteSource() {},
+    ...overrides,
+  };
+}
+
 function requestWithCode(
   videoId: string,
   accessCode: string,
@@ -819,6 +1261,22 @@ function requestForPath(
     headers: {
       cookie: cookieHeaderForAccessCode(accessCode),
     },
+  });
+}
+
+function jsonRequest(
+  path: string,
+  accessCode: string,
+  body: unknown,
+  method = "POST",
+): Request {
+  return new Request(`http://localhost${path}`, {
+    method,
+    headers: {
+      cookie: cookieHeaderForAccessCode(accessCode),
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
   });
 }
 

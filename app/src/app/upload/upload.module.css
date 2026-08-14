@@ -136,6 +136,22 @@
   transition: width 160ms ease;
 }
 
+.cancelUploadButton {
+  min-height: var(--cm-touch-target);
+  border: var(--cm-border-width) solid var(--cm-border-strong);
+  border-radius: var(--cm-radius-action);
+  background: var(--cm-surface-raised);
+  color: var(--cm-text);
+  cursor: pointer;
+  font-size: var(--cm-font-secondary);
+  font-weight: 900;
+  padding-inline: var(--cm-space-3);
+}
+
+.cancelUploadButton:active {
+  transform: translateY(1px);
+}
+
 .transferNotice {
   margin: 0;
   border: var(--cm-border-width) solid var(--cm-border-strong);

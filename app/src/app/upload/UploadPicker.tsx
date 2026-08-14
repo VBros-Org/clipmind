@@ -31,23 +31,17 @@ import {
   type UploadTransferState,
 } from "../../../lib/upload-transfer-state";
 import {
+  abortMultipartUpload,
+  clearMultipartUploadResume,
+  isUploadCancelledError,
+  uploadFileMultipart,
+  type UploadProgress,
+} from "../../../lib/upload-multipart-client";
+import {
   VideoDeleteSheet,
   type VideoDeleteTarget,
 } from "../VideoDeleteSheet";
 import styles from "./upload.module.css";
-
-type UploadProgress = {
-  fileName: string;
-  loaded: number;
-  total: number;
-  percent: number;
-};
-
-type UploadResponse = {
-  videoId: string;
-  stage: PipelineStage;
-  bytes: number;
-};
 
 const CLIENT_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 const POLL_MS = 3_000;
@@ -127,6 +121,8 @@ export function UploadPicker({
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const wakeLockRef = useRef<ScreenWakeLockManager | null>(null);
+  const uploadAbortRef = useRef<AbortController | null>(null);
+  const activeUploadIntentRef = useRef<string | null>(null);
   const [uploads, setUploads] = useState(initialUploads);
   const [activeVideoId, setActiveVideoId] = useState<string | null>(
     () => initialUploads.find((upload) => isProcessing(upload.pipelineStage))?.id ?? null,
@@ -264,10 +260,18 @@ export function UploadPicker({
       percent: 0,
     });
     void getWakeLockManager().start();
+    const abortController = new AbortController();
+    uploadAbortRef.current = abortController;
+    activeUploadIntentRef.current = null;
 
     try {
       const response = await uploadFile(file, (nextProgress) => {
         setProgress(nextProgress);
+      }, {
+        signal: abortController.signal,
+        onIntentReady(intentId) {
+          activeUploadIntentRef.current = intentId;
+        },
       });
       const upload: UploadView = {
         id: response.videoId,
@@ -280,14 +284,28 @@ export function UploadPicker({
       };
 
       setUploads((current) =>
-        [upload, ...current.filter((item) => item.id !== upload.id)].slice(0, 3),
+        [upload, ...current.filter((item) => item.id !== upload.id)],
       );
       setActiveVideoId(upload.id);
       setTransferState(uploadTransferSucceeded());
     } catch (error) {
-      setTransferState(uploadTransferFailed(file));
-      setUploadError(errorMessage(error));
+      if (isUploadCancelledError(error)) {
+        const intentId = activeUploadIntentRef.current;
+        if (intentId) {
+          await abortMultipartUpload(intentId).catch(() => undefined);
+        }
+        clearMultipartUploadResume(file);
+        setTransferState(uploadTransferIdle());
+        setUploadError("Upload cancelled.");
+      } else {
+        setTransferState(uploadTransferFailed(file));
+        setUploadError(errorMessage(error));
+      }
     } finally {
+      if (uploadAbortRef.current === abortController) {
+        uploadAbortRef.current = null;
+      }
+      activeUploadIntentRef.current = null;
       setProgress(null);
       void wakeLockRef.current?.stop();
       if (inputRef.current) {
@@ -302,6 +320,10 @@ export function UploadPicker({
     }
 
     await startUploadTransfer(transferState.retryFile);
+  }
+
+  function cancelUploadTransfer() {
+    uploadAbortRef.current?.abort();
   }
 
   async function retryUpload(videoId: string) {
@@ -432,6 +454,13 @@ export function UploadPicker({
               style={{ width: `${progress.percent}%` }}
             />
           </div>
+          <button
+            className={styles.cancelUploadButton}
+            onClick={cancelUploadTransfer}
+            type="button"
+          >
+            Cancel upload
+          </button>
         </section>
       ) : null}
 
@@ -600,53 +629,9 @@ function RecentUploads({
 function uploadFile(
   file: File,
   onProgress: (progress: UploadProgress) => void,
-): Promise<UploadResponse> {
-  return new Promise((resolve, reject) => {
-    const form = new FormData();
-    form.set("file", file, file.name);
-
-    const request = new XMLHttpRequest();
-    request.open("POST", "/api/videos/upload");
-    request.responseType = "json";
-    request.withCredentials = true;
-    request.setRequestHeader("X-ClipMind-File-Size", String(file.size));
-
-    request.upload.onprogress = (event) => {
-      const total = event.lengthComputable ? event.total : file.size;
-      const percent = total > 0 ? Math.min(99, Math.round((event.loaded / total) * 100)) : 0;
-      onProgress({
-        fileName: file.name,
-        loaded: event.loaded,
-        total,
-        percent,
-      });
-    };
-
-    request.onload = () => {
-      const body = readXhrJson(request);
-      if (request.status < 200 || request.status >= 300) {
-        reject(new Error(xhrError(body) ?? "Upload failed."));
-        return;
-      }
-
-      onProgress({
-        fileName: file.name,
-        loaded: file.size,
-        total: file.size,
-        percent: 100,
-      });
-      resolve(body as UploadResponse);
-    };
-
-    request.onerror = () => {
-      reject(new Error("Upload failed."));
-    };
-    request.onabort = () => {
-      reject(new Error("Upload cancelled."));
-    };
-
-    request.send(form);
-  });
+  options: Parameters<typeof uploadFileMultipart>[2],
+) {
+  return uploadFileMultipart(file, onProgress, options);
 }
 
 function mergeStatus(
@@ -722,22 +707,6 @@ function failedStepLine(error: string | null): string {
 function errorMessageFromPipeline(error: string | null): string | null {
   const message = error?.includes(":") ? error.slice(error.indexOf(":") + 1) : error;
   return message?.trim() || null;
-}
-
-function readXhrJson(request: XMLHttpRequest): { error?: string } | UploadResponse {
-  if (request.response && typeof request.response === "object") {
-    return request.response as { error?: string } | UploadResponse;
-  }
-
-  try {
-    return JSON.parse(request.responseText) as { error?: string } | UploadResponse;
-  } catch {
-    return {};
-  }
-}
-
-function xhrError(body: { error?: string } | UploadResponse): string | null {
-  return "error" in body ? body.error ?? null : null;
 }
 
 function formatBytes(bytes: number): string {

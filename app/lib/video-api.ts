@@ -18,7 +18,9 @@ import { loadCreatorSessionFromCookieHeader } from "./review-auth";
 import {
   createR2Storage,
   publicMediaKeyFromUrl,
+  sourceKeyForVideo,
   type R2Storage,
+  type SourceUploadPart,
   type StorageUploadBody,
 } from "./storage";
 import {
@@ -32,6 +34,9 @@ import {
 
 export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 export const MAX_UPLOAD_BYTES_LABEL = "2 GB";
+export const MULTIPART_PART_SIZE_BYTES = 16 * 1024 * 1024;
+export const MIN_MULTIPART_PART_BYTES = 10 * 1024 * 1024;
+export const MAX_SIGNED_UPLOAD_PARTS = 64;
 export const POSTED_HISTORY_DELETE_MESSAGE =
   "This video has posted clips. Posted history cannot be deleted.";
 
@@ -39,10 +44,20 @@ type RouteParams = { id: string } | Promise<{ id: string }>;
 type UploadWorkflowStage = PipelineStage | MindOnboardingStage;
 type BackgroundRunResult = PipelineRunResult | FirstVideoOnboardingResult;
 type VideoDeleteStorage = Pick<R2Storage, "deleteSource" | "deleteMediaObject">;
+type MultipartUploadStorage = Pick<
+  R2Storage,
+  | "createSourceMultipartUpload"
+  | "presignSourcePartUpload"
+  | "listSourceUploadParts"
+  | "completeSourceMultipartUpload"
+  | "abortSourceMultipartUpload"
+  | "deleteSource"
+>;
 
 export type VideoApiOptions = {
   prismaClient?: PrismaClient;
   storage?: Pick<R2Storage, "uploadSource">;
+  multipartStorage?: MultipartUploadStorage;
   deleteStorage?: VideoDeleteStorage;
   runPipelineImpl?: (videoId: string) => Promise<BackgroundRunResult>;
   retryPipelineImpl?: (videoId: string) => Promise<BackgroundRunResult>;
@@ -54,6 +69,19 @@ export type VideoApiOptions = {
 type UploadedFile = {
   sourceKey: string;
   bytes: number;
+};
+
+type UploadIntentForMultipart = {
+  id: string;
+  creatorId: string;
+  videoId: string | null;
+  sourceKey: string;
+  uploadId: string | null;
+  fileName: string | null;
+  contentType: string;
+  declaredSizeBytes: bigint;
+  partSizeBytes: number;
+  status: string;
 };
 
 class VideoApiError extends Error {
@@ -154,6 +182,352 @@ export async function handleUploadVideo(
 
     throw error;
   }
+}
+
+export async function handleCreateMultipartUpload(
+  request: Request,
+  options: VideoApiOptions = {},
+): Promise<Response> {
+  const session = await loadCreatorSession(request, options);
+  if (!session) {
+    return json({ error: "Login required." }, 401);
+  }
+
+  try {
+    const input = await readMultipartCreateInput(request);
+    const db = options.prismaClient ?? prisma;
+    const storage = options.multipartStorage ?? createR2Storage();
+    const intentId = randomUUID();
+    const videoId = randomUUID();
+    const sourceKey = sourceKeyForVideo(videoId);
+    const now = new Date();
+
+    await db.uploadIntent.create({
+      data: {
+        id: intentId,
+        creatorId: session.creatorId,
+        videoId,
+        sourceKey,
+        uploadId: null,
+        fileName: input.fileName,
+        contentType: input.contentType,
+        declaredSizeBytes: BigInt(input.size),
+        partSizeBytes: MULTIPART_PART_SIZE_BYTES,
+        status: "creating",
+        lastActivityAt: now,
+      },
+    });
+
+    let uploadId: string | null = null;
+    try {
+      const created = await storage.createSourceMultipartUpload({
+        key: sourceKey,
+        contentType: input.contentType,
+      });
+      uploadId = created.uploadId;
+
+      await db.uploadIntent.update({
+        where: {
+          id: intentId,
+        },
+        data: {
+          uploadId,
+          status: "uploading",
+          lastActivityAt: new Date(),
+        },
+      });
+    } catch (error) {
+      if (uploadId) {
+        await storage.abortSourceMultipartUpload({
+          key: sourceKey,
+          uploadId,
+        });
+      }
+
+      await db.uploadIntent.updateMany({
+        where: {
+          id: intentId,
+          status: {
+            not: "completed",
+          },
+        },
+        data: {
+          status: "failed",
+          failureReason: cappedErrorMessage(error),
+          lastActivityAt: new Date(),
+        },
+      });
+
+      throw error;
+    }
+
+    return json(
+      {
+        intentId,
+        status: "uploading",
+        fileName: input.fileName,
+        size: input.size,
+        partSizeBytes: MULTIPART_PART_SIZE_BYTES,
+        uploadedParts: [],
+      },
+      201,
+    );
+  } catch (error) {
+    if (error instanceof VideoApiError) {
+      return json({ error: error.message }, error.status);
+    }
+
+    throw error;
+  }
+}
+
+export async function handleGetMultipartUpload(
+  request: Request,
+  params: RouteParams,
+  options: VideoApiOptions = {},
+): Promise<Response> {
+  const session = await loadCreatorSession(request, options);
+  if (!session) {
+    return json({ error: "Login required." }, 401);
+  }
+
+  const db = options.prismaClient ?? prisma;
+  const storage = options.multipartStorage ?? createR2Storage();
+  const intent = await loadMultipartUploadIntent(
+    db,
+    await videoId(params),
+    session.creatorId,
+  );
+
+  if (!intent) {
+    return json({ error: "Upload not found." }, 404);
+  }
+
+  if (intent.status === "completed") {
+    return json(
+      multipartIntentResponse(intent, {
+        uploadedParts: [],
+      }),
+      200,
+    );
+  }
+
+  if (intent.status !== "uploading" || !intent.uploadId) {
+    return json(
+      multipartIntentResponse(intent, {
+        uploadedParts: [],
+      }),
+      200,
+    );
+  }
+
+  const uploadedParts = await storage.listSourceUploadParts({
+    key: intent.sourceKey,
+    uploadId: intent.uploadId,
+  });
+  await touchMultipartIntent(db, intent.id);
+
+  return json(
+    multipartIntentResponse(intent, {
+      uploadedParts,
+    }),
+    200,
+  );
+}
+
+export async function handleSignMultipartUploadParts(
+  request: Request,
+  params: RouteParams,
+  options: VideoApiOptions = {},
+): Promise<Response> {
+  const session = await loadCreatorSession(request, options);
+  if (!session) {
+    return json({ error: "Login required." }, 401);
+  }
+
+  try {
+    const db = options.prismaClient ?? prisma;
+    const storage = options.multipartStorage ?? createR2Storage();
+    const intent = await loadMultipartUploadIntent(
+      db,
+      await videoId(params),
+      session.creatorId,
+    );
+
+    if (!intent) {
+      return json({ error: "Upload not found." }, 404);
+    }
+    if (intent.status !== "uploading" || !intent.uploadId) {
+      return json({ error: "Upload is not active." }, 409);
+    }
+
+    const partNumbers = await readPartNumbers(request, intent);
+    const urls = await Promise.all(
+      partNumbers.map(async (partNumber) => ({
+        partNumber,
+        url: await storage.presignSourcePartUpload({
+          key: intent.sourceKey,
+          uploadId: intent.uploadId ?? "",
+          partNumber,
+        }),
+      })),
+    );
+    await touchMultipartIntent(db, intent.id);
+
+    return json(
+      {
+        intentId: intent.id,
+        urls,
+      },
+      200,
+    );
+  } catch (error) {
+    if (error instanceof VideoApiError) {
+      return json({ error: error.message }, error.status);
+    }
+
+    throw error;
+  }
+}
+
+export async function handleCompleteMultipartUpload(
+  request: Request,
+  params: RouteParams,
+  options: VideoApiOptions = {},
+): Promise<Response> {
+  const session = await loadCreatorSession(request, options);
+  if (!session) {
+    return json({ error: "Login required." }, 401);
+  }
+
+  const db = options.prismaClient ?? prisma;
+  const storage = options.multipartStorage ?? createR2Storage();
+  const intent = await loadMultipartUploadIntent(
+    db,
+    await videoId(params),
+    session.creatorId,
+  );
+
+  if (!intent) {
+    return json({ error: "Upload not found." }, 404);
+  }
+
+  if (intent.status === "completed" && intent.videoId) {
+    const video = await db.video.findFirst({
+      where: {
+        id: intent.videoId,
+        creatorId: session.creatorId,
+      },
+      select: {
+        id: true,
+        pipelineStage: true,
+      },
+    });
+
+    if (video) {
+      return json(
+        {
+          videoId: video.id,
+          stage: video.pipelineStage ?? "uploaded",
+          bytes: Number(intent.declaredSizeBytes),
+        },
+        202,
+      );
+    }
+  }
+
+  if (intent.status !== "uploading" || !intent.uploadId) {
+    return json({ error: "Upload is not active." }, 409);
+  }
+
+  const uploadedParts = await storage.listSourceUploadParts({
+    key: intent.sourceKey,
+    uploadId: intent.uploadId,
+  });
+  const reconciliation = reconcileUploadParts(intent, uploadedParts);
+  if (!reconciliation.ok) {
+    await failAndAbortMultipartIntent(
+      db,
+      storage,
+      intent,
+      reconciliation.error,
+      "failed",
+    );
+    return json({ error: reconciliation.error }, 400);
+  }
+
+  await storage.completeSourceMultipartUpload({
+    key: intent.sourceKey,
+    uploadId: intent.uploadId,
+    parts: reconciliation.parts,
+  });
+
+  const completed = await createVideoAfterMultipartCompletion(
+    db,
+    intent,
+    session.creatorId,
+  );
+
+  startPipelineInBackground(
+    completed.videoId,
+    completed.runMindOnboarding
+      ? options.runFirstVideoOnboardingPipelineImpl ??
+          runFirstVideoOnboardingPipeline
+      : options.runPipelineImpl ?? runPipeline,
+    "upload pipeline",
+  );
+
+  return json(
+    {
+      videoId: completed.videoId,
+      stage: completed.runMindOnboarding ? "learning_voice" : "uploaded",
+      bytes: reconciliation.bytes,
+    },
+    202,
+  );
+}
+
+export async function handleAbortMultipartUpload(
+  request: Request,
+  params: RouteParams,
+  options: VideoApiOptions = {},
+): Promise<Response> {
+  const session = await loadCreatorSession(request, options);
+  if (!session) {
+    return json({ error: "Login required." }, 401);
+  }
+
+  const db = options.prismaClient ?? prisma;
+  const storage = options.multipartStorage ?? createR2Storage();
+  const intent = await loadMultipartUploadIntent(
+    db,
+    await videoId(params),
+    session.creatorId,
+  );
+
+  if (!intent) {
+    return json({ error: "Upload not found." }, 404);
+  }
+
+  if (intent.status === "completed") {
+    return json({ error: "Completed uploads cannot be cancelled." }, 409);
+  }
+
+  await failAndAbortMultipartIntent(
+    db,
+    storage,
+    intent,
+    "Upload cancelled.",
+    "aborted",
+  );
+
+  return json(
+    {
+      intentId: intent.id,
+      aborted: true,
+    },
+    200,
+  );
 }
 
 export async function handleGetVideoStatus(
@@ -428,6 +802,387 @@ export async function handleRetryVideo(
     },
     202,
   );
+}
+
+async function readMultipartCreateInput(request: Request): Promise<{
+  fileName: string | null;
+  contentType: string;
+  size: number;
+}> {
+  const body = await readJsonObject(request);
+  const size = readUploadSizeValue(body.size);
+  if (size <= 0) {
+    throw new VideoApiError(400, "Upload file size must be greater than zero.");
+  }
+  if (size > MAX_UPLOAD_BYTES) {
+    throw new VideoApiError(
+      413,
+      `Video must be ${MAX_UPLOAD_BYTES_LABEL} or smaller.`,
+    );
+  }
+
+  const contentType = typeof body.contentType === "string" ? body.contentType.trim() : "";
+  if (!contentType.toLowerCase().startsWith("video/")) {
+    throw new VideoApiError(415, "Upload file must be a video.");
+  }
+
+  const rawFileName = typeof body.fileName === "string" ? body.fileName : null;
+  return {
+    fileName: cleanFileName(rawFileName),
+    contentType,
+    size,
+  };
+}
+
+async function readPartNumbers(
+  request: Request,
+  intent: UploadIntentForMultipart,
+): Promise<number[]> {
+  const body = await readJsonObject(request);
+  if (!Array.isArray(body.partNumbers)) {
+    throw new VideoApiError(400, "Part numbers are required.");
+  }
+
+  const expectedPartCount = expectedUploadPartCount(intent);
+  const seen = new Set<number>();
+  const partNumbers: number[] = [];
+  for (const value of body.partNumbers) {
+    if (!Number.isInteger(value)) {
+      throw new VideoApiError(400, "Part numbers must be whole numbers.");
+    }
+    if (value < 1 || value > expectedPartCount) {
+      throw new VideoApiError(400, "Part number is outside this upload.");
+    }
+    if (!seen.has(value)) {
+      seen.add(value);
+      partNumbers.push(value);
+    }
+  }
+
+  if (partNumbers.length === 0) {
+    throw new VideoApiError(400, "At least one part number is required.");
+  }
+  if (partNumbers.length > MAX_SIGNED_UPLOAD_PARTS) {
+    throw new VideoApiError(
+      400,
+      `Sign at most ${MAX_SIGNED_UPLOAD_PARTS} upload parts per request.`,
+    );
+  }
+
+  return partNumbers;
+}
+
+async function readJsonObject(request: Request): Promise<Record<string, unknown>> {
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    throw new VideoApiError(400, "Request body must be JSON.");
+  }
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new VideoApiError(400, "Request body must be a JSON object.");
+  }
+
+  return body as Record<string, unknown>;
+}
+
+function readUploadSizeValue(value: unknown): number {
+  const size =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value)
+        : NaN;
+  if (!Number.isSafeInteger(size) || size < 0) {
+    throw new VideoApiError(400, "Upload file size must be a whole number.");
+  }
+
+  return size;
+}
+
+async function loadMultipartUploadIntent(
+  db: PrismaClient,
+  intentId: string,
+  creatorId: string,
+): Promise<UploadIntentForMultipart | null> {
+  return db.uploadIntent.findFirst({
+    where: {
+      id: intentId,
+      creatorId,
+    },
+    select: {
+      id: true,
+      creatorId: true,
+      videoId: true,
+      sourceKey: true,
+      uploadId: true,
+      fileName: true,
+      contentType: true,
+      declaredSizeBytes: true,
+      partSizeBytes: true,
+      status: true,
+    },
+  });
+}
+
+async function touchMultipartIntent(
+  db: PrismaClient,
+  intentId: string,
+): Promise<void> {
+  await db.uploadIntent.updateMany({
+    where: {
+      id: intentId,
+      status: "uploading",
+    },
+    data: {
+      lastActivityAt: new Date(),
+    },
+  });
+}
+
+function multipartIntentResponse(
+  intent: UploadIntentForMultipart,
+  args: {
+    uploadedParts: SourceUploadPart[];
+  },
+): {
+  intentId: string;
+  status: string;
+  fileName: string | null;
+  size: number;
+  partSizeBytes: number;
+  uploadedParts: Array<{
+    partNumber: number;
+    size: number;
+  }>;
+  videoId: string | null;
+} {
+  return {
+    intentId: intent.id,
+    status: intent.status,
+    fileName: intent.fileName,
+    size: Number(intent.declaredSizeBytes),
+    partSizeBytes: intent.partSizeBytes,
+    uploadedParts: args.uploadedParts.map((part) => ({
+      partNumber: part.partNumber,
+      size: part.size,
+    })),
+    videoId: intent.status === "completed" ? intent.videoId : null,
+  };
+}
+
+function reconcileUploadParts(
+  intent: UploadIntentForMultipart,
+  parts: SourceUploadPart[],
+):
+  | {
+      ok: true;
+      bytes: number;
+      parts: SourceUploadPart[];
+    }
+  | {
+      ok: false;
+      error: string;
+    } {
+  const expectedPartCount = expectedUploadPartCount(intent);
+  const expectedBytes = Number(intent.declaredSizeBytes);
+  const byPartNumber = new Map<number, SourceUploadPart>();
+
+  for (const part of parts) {
+    if (byPartNumber.has(part.partNumber)) {
+      return {
+        ok: false,
+        error: "Upload contains duplicate parts.",
+      };
+    }
+    byPartNumber.set(part.partNumber, part);
+  }
+
+  const orderedParts: SourceUploadPart[] = [];
+  let totalBytes = 0;
+  for (let partNumber = 1; partNumber <= expectedPartCount; partNumber += 1) {
+    const part = byPartNumber.get(partNumber);
+    if (!part) {
+      return {
+        ok: false,
+        error: "Upload is missing one or more parts.",
+      };
+    }
+
+    const expectedSize = expectedUploadPartSize(intent, partNumber);
+    if (part.size !== expectedSize) {
+      return {
+        ok: false,
+        error: "Uploaded part bytes do not match the declared file size.",
+      };
+    }
+    if (partNumber < expectedPartCount && part.size < MIN_MULTIPART_PART_BYTES) {
+      return {
+        ok: false,
+        error: "Uploaded parts are smaller than the multipart minimum.",
+      };
+    }
+    if (!part.etag.trim()) {
+      return {
+        ok: false,
+        error: "Upload part is missing its R2 checksum.",
+      };
+    }
+
+    orderedParts.push(part);
+    totalBytes += part.size;
+  }
+
+  if (byPartNumber.size !== expectedPartCount || totalBytes !== expectedBytes) {
+    return {
+      ok: false,
+      error: "Uploaded bytes do not match the declared file size.",
+    };
+  }
+
+  return {
+    ok: true,
+    bytes: totalBytes,
+    parts: orderedParts,
+  };
+}
+
+function expectedUploadPartCount(intent: UploadIntentForMultipart): number {
+  return Math.ceil(Number(intent.declaredSizeBytes) / intent.partSizeBytes);
+}
+
+function expectedUploadPartSize(
+  intent: UploadIntentForMultipart,
+  partNumber: number,
+): number {
+  const declaredSize = Number(intent.declaredSizeBytes);
+  const fullParts = Math.floor(declaredSize / intent.partSizeBytes);
+  const lastPartSize = declaredSize % intent.partSizeBytes;
+  const expectedPartCount = expectedUploadPartCount(intent);
+
+  if (partNumber < expectedPartCount || lastPartSize === 0) {
+    return intent.partSizeBytes;
+  }
+
+  if (partNumber === fullParts + 1) {
+    return lastPartSize;
+  }
+
+  return intent.partSizeBytes;
+}
+
+async function failAndAbortMultipartIntent(
+  db: PrismaClient,
+  storage: MultipartUploadStorage,
+  intent: UploadIntentForMultipart,
+  reason: string,
+  status: "aborted" | "failed",
+): Promise<void> {
+  if (intent.uploadId) {
+    await storage.abortSourceMultipartUpload({
+      key: intent.sourceKey,
+      uploadId: intent.uploadId,
+    });
+  }
+  await storage.deleteSource(intent.sourceKey);
+
+  const now = new Date();
+  await db.uploadIntent.updateMany({
+    where: {
+      id: intent.id,
+      status: {
+        not: "completed",
+      },
+    },
+    data: {
+      status,
+      failureReason: reason,
+      abortedAt: now,
+      lastActivityAt: now,
+    },
+  });
+}
+
+async function createVideoAfterMultipartCompletion(
+  db: PrismaClient,
+  intent: UploadIntentForMultipart,
+  creatorId: string,
+): Promise<{
+  videoId: string;
+  runMindOnboarding: boolean;
+}> {
+  const now = new Date();
+  return db.$transaction(async (tx) => {
+    const creator = await tx.creator.findUniqueOrThrow({
+      where: {
+        id: creatorId,
+      },
+      select: {
+        mindId: true,
+        mindStage: true,
+      },
+    });
+    const runMindOnboarding = creatorNeedsMindOnboarding(creator);
+    const videoId = intent.videoId ?? randomUUID();
+    const video = await tx.video.create({
+      data: {
+        id: videoId,
+        creatorId,
+        sourceKey: intent.sourceKey,
+        contentKey: `uploaded:${creatorId}:${videoId}`,
+        status: "uploaded",
+        pipelineStage: "uploaded",
+        pipelineError: null,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    await tx.uploadIntent.update({
+      where: {
+        id: intent.id,
+      },
+      data: {
+        videoId: video.id,
+        status: "completed",
+        failureReason: null,
+        completedAt: now,
+        lastActivityAt: now,
+      },
+    });
+
+    if (runMindOnboarding) {
+      await tx.creator.update({
+        where: {
+          id: creatorId,
+        },
+        data: {
+          mindStage: "learning_voice",
+          mindError: null,
+        },
+      });
+    }
+
+    return {
+      videoId: video.id,
+      runMindOnboarding,
+    };
+  });
+}
+
+function cleanFileName(value: string | null): string | null {
+  const clean = value?.trim().replace(/\s+/g, " ");
+  if (!clean) {
+    return null;
+  }
+
+  return clean.slice(0, 255);
+}
+
+function cappedErrorMessage(error: unknown): string {
+  return errorMessage(error).slice(0, 500);
 }
 
 function assertUploadRequest(request: Request): number {

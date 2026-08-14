@@ -32,6 +32,10 @@ type RecordedCommand = {
     Bucket?: unknown;
     Key?: unknown;
     ContentType?: unknown;
+    UploadId?: unknown;
+    PartNumber?: unknown;
+    MultipartUpload?: unknown;
+    Prefix?: unknown;
   };
 };
 
@@ -145,6 +149,179 @@ test("storage deletes source and media objects through the configured buckets", 
       },
     ],
   );
+});
+
+test("storage manages source multipart upload sessions through the configured bucket", async () => {
+  const sentCommands: RecordedCommand[] = [];
+  const s3Client = {
+    async send(command) {
+      sentCommands.push(recordCommand(command));
+      const input = recordCommand(command).input;
+      if (input.ContentType === "video/mp4" && input.Key === "videos/v1/source.mp4") {
+        return { UploadId: "upload-1" };
+      }
+      if (input.UploadId === "upload-1" && input.PartNumber === undefined) {
+        return {
+          Parts: [
+            {
+              PartNumber: 1,
+              Size: 16,
+              ETag: "etag-1",
+            },
+          ],
+        };
+      }
+      if (input.Prefix === "videos/") {
+        return {
+          Uploads: [
+            {
+              Key: "videos/v2/source.mp4",
+              UploadId: "upload-2",
+              Initiated: new Date("2026-08-14T00:00:00.000Z"),
+            },
+          ],
+        };
+      }
+      return {};
+    },
+  } satisfies S3ClientLike;
+  let presignedCommand: RecordedCommand | null = null;
+
+  const storage = createR2Storage({
+    env: storageEnv,
+    s3Client,
+    async presignSourcePart(client, command) {
+      assert.equal(client, s3Client);
+      presignedCommand = recordCommand(command);
+      return "https://signed.example/part-1";
+    },
+  });
+
+  const created = await storage.createSourceMultipartUpload({
+    key: "videos/v1/source.mp4",
+    contentType: "video/mp4",
+  });
+  const signedUrl = await storage.presignSourcePartUpload({
+    key: "videos/v1/source.mp4",
+    uploadId: created.uploadId,
+    partNumber: 1,
+  });
+  const parts = await storage.listSourceUploadParts({
+    key: "videos/v1/source.mp4",
+    uploadId: created.uploadId,
+  });
+  await storage.completeSourceMultipartUpload({
+    key: "videos/v1/source.mp4",
+    uploadId: created.uploadId,
+    parts,
+  });
+  await storage.abortSourceMultipartUpload({
+    key: "videos/v1/source.mp4",
+    uploadId: created.uploadId,
+  });
+  const uploads = await storage.listSourceMultipartUploads("videos/");
+
+  assert.equal(created.uploadId, "upload-1");
+  assert.equal(signedUrl, "https://signed.example/part-1");
+  assert.ok(presignedCommand);
+  assert.deepEqual(recordCommand(presignedCommand).input, {
+    Bucket: "clipmind-sources",
+    Key: "videos/v1/source.mp4",
+    UploadId: "upload-1",
+    PartNumber: 1,
+  });
+  assert.deepEqual(parts, [
+    {
+      partNumber: 1,
+      size: 16,
+      etag: "etag-1",
+    },
+  ]);
+  assert.deepEqual(uploads, [
+    {
+      key: "videos/v2/source.mp4",
+      uploadId: "upload-2",
+      initiated: new Date("2026-08-14T00:00:00.000Z"),
+    },
+  ]);
+  assert.deepEqual(
+    sentCommands.map((command) => command.input),
+    [
+      {
+        Bucket: "clipmind-sources",
+        Key: "videos/v1/source.mp4",
+        ContentType: "video/mp4",
+      },
+      {
+        Bucket: "clipmind-sources",
+        Key: "videos/v1/source.mp4",
+        UploadId: "upload-1",
+        PartNumberMarker: undefined,
+      },
+      {
+        Bucket: "clipmind-sources",
+        Key: "videos/v1/source.mp4",
+        UploadId: "upload-1",
+        MultipartUpload: {
+          Parts: [
+            {
+              ETag: "etag-1",
+              PartNumber: 1,
+            },
+          ],
+        },
+      },
+      {
+        Bucket: "clipmind-sources",
+        Key: "videos/v1/source.mp4",
+        UploadId: "upload-1",
+      },
+      {
+        Bucket: "clipmind-sources",
+        Prefix: "videos/",
+        KeyMarker: undefined,
+        UploadIdMarker: undefined,
+      },
+    ],
+  );
+});
+
+test("storage lists source objects for orphan reconciliation", async () => {
+  const s3Client = {
+    async send(command) {
+      assert.deepEqual(recordCommand(command).input, {
+        Bucket: "clipmind-sources",
+        Prefix: "videos/",
+        ContinuationToken: undefined,
+      });
+      return {
+        Contents: [
+          {
+            Key: "videos/v1/source.mp4",
+            Size: 123,
+            LastModified: new Date("2026-08-14T00:00:00.000Z"),
+          },
+          {
+            Key: "",
+            Size: 456,
+          },
+        ],
+      };
+    },
+  } satisfies S3ClientLike;
+
+  const objects = await createR2Storage({
+    env: storageEnv,
+    s3Client,
+  }).listSourceObjects("videos/");
+
+  assert.deepEqual(objects, [
+    {
+      key: "videos/v1/source.mp4",
+      size: 123,
+      lastModified: new Date("2026-08-14T00:00:00.000Z"),
+    },
+  ]);
 });
 
 test("storage delete tolerates missing objects", async () => {
