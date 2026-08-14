@@ -27,6 +27,13 @@ import {
   type GenerateClipThumbnailOptions,
   type GenerateClipThumbnailResult,
 } from "./thumbnails";
+import {
+  WorkflowLeaseLostError,
+  incrementStageAttempt,
+  isWorkflowLeaseExpired,
+  newWorkflowRunId,
+  withWorkflowHeartbeat,
+} from "./workflow-lease";
 
 export const PIPELINE_STAGES = [
   "uploaded",
@@ -43,6 +50,7 @@ export type RetryablePipelineStage = Exclude<
   PipelineStage,
   "done" | "failed" | "uploaded"
 >;
+export type ActivePipelineStage = Exclude<PipelineStage, "done" | "failed">;
 
 export type PipelineRunResult =
   | {
@@ -108,6 +116,8 @@ export type PipelineOptions = {
   syncTasteFeedbackImpl?: SyncTasteFeedbackImpl;
   tasteFeedbackOptions?: Omit<SyncTasteFeedbackOptions, "prismaClient">;
   tasteFeedbackLogger?: Pick<Console, "error">;
+  now?: Date;
+  heartbeatIntervalMs?: number;
   onStageChange?: (stage: PipelineStage) => void | Promise<void>;
 };
 
@@ -132,6 +142,7 @@ export async function runPipeline(
   options: PipelineOptions = {},
 ): Promise<PipelineRunResult> {
   const db = options.prismaClient ?? prisma;
+  const runId = newWorkflowRunId("pipeline");
   const video = await db.video.findUnique({
     where: {
       id: videoId,
@@ -156,6 +167,7 @@ export async function runPipeline(
   if (activeStage === "uploaded") {
     activeStage = "transcribing";
   }
+  await claimPipelineRun(db, video.id, runId, options);
 
   const ingestImpl = options.ingestUploadedVideoImpl ?? ingestUploadedVideo;
   const rankImpl = options.rankCandidatesImpl ?? rankCandidates;
@@ -166,39 +178,54 @@ export async function runPipeline(
   try {
     if (shouldRun(activeStage, "transcribing")) {
       activeStage = "transcribing";
-      await setPipelineStage(db, video.id, activeStage, options);
-      await ingestImpl(video.id, {
-        ...options.ingestOptions,
-        prismaClient: db,
-      });
+      await setPipelineStage(db, video.id, runId, activeStage, options);
+      await withWorkflowHeartbeat(
+        () => heartbeatPipelineRun(db, video.id, runId, options),
+        () =>
+          ingestImpl(video.id, {
+            ...options.ingestOptions,
+            prismaClient: db,
+          }),
+        options.heartbeatIntervalMs,
+      );
     }
 
     if (shouldRun(activeStage, "candidates")) {
       activeStage = "candidates";
-      await setPipelineStage(db, video.id, activeStage, options);
+      await setPipelineStage(db, video.id, runId, activeStage, options);
       await assertCandidateClips(db, video.id, video.creatorId);
-      await generateCandidateThumbnails(
-        db,
-        video.id,
-        video.creatorId,
-        thumbnailImpl,
-        options,
+      await withWorkflowHeartbeat(
+        () => heartbeatPipelineRun(db, video.id, runId, options),
+        () =>
+          generateCandidateThumbnails(
+            db,
+            video.id,
+            video.creatorId,
+            thumbnailImpl,
+            options,
+          ),
+        options.heartbeatIntervalMs,
       );
     }
 
     if (shouldRun(activeStage, "ranking")) {
       activeStage = "ranking";
-      await setPipelineStage(db, video.id, activeStage, options);
-      const rankResult = await rankImpl(video.creatorId, video.id, {
-        ...options.rankOptions,
-        prismaClient: db,
-      });
+      await setPipelineStage(db, video.id, runId, activeStage, options);
+      const rankResult = await withWorkflowHeartbeat(
+        () => heartbeatPipelineRun(db, video.id, runId, options),
+        () =>
+          rankImpl(video.creatorId, video.id, {
+            ...options.rankOptions,
+            prismaClient: db,
+          }),
+        options.heartbeatIntervalMs,
+      );
       assertRanked(rankResult);
     }
 
     if (shouldRun(activeStage, "captions")) {
       activeStage = "captions";
-      await setPipelineStage(db, video.id, activeStage, options);
+      await setPipelineStage(db, video.id, runId, activeStage, options);
       const topClips = await loadTopRankedCandidateClips(
         db,
         video.id,
@@ -209,10 +236,15 @@ export async function runPipeline(
       }
 
       for (const clip of topClips) {
-        const captionResult = await captionImpl(clip.id, {
-          ...options.captionOptions,
-          prismaClient: db,
-        });
+        const captionResult = await withWorkflowHeartbeat(
+          () => heartbeatPipelineRun(db, video.id, runId, options),
+          () =>
+            captionImpl(clip.id, {
+              ...options.captionOptions,
+              prismaClient: db,
+            }),
+          options.heartbeatIntervalMs,
+        );
         assertCaptioned(captionResult, clip.id);
         captionedClipIds.push(clip.id);
       }
@@ -222,11 +254,12 @@ export async function runPipeline(
       db,
       video.id,
       video.creatorId,
+      runId,
       captionImpl,
       options,
       captionedClipIds,
     );
-    await setPipelineStage(db, video.id, "done", options);
+    await setPipelineStage(db, video.id, runId, "done", options);
     await runSchedulePass(video.creatorId, new Date(), {
       prismaClient: db,
     });
@@ -235,15 +268,7 @@ export async function runPipeline(
   } catch (error) {
     const failedStage = toRetryableStage(activeStage);
     const errorText = `${failedStage}: ${shortErrorMessage(error)}`;
-    await db.video.update({
-      where: {
-        id: video.id,
-      },
-      data: {
-        pipelineStage: "failed",
-        pipelineError: errorText,
-      },
-    });
+    await markPipelineFailed(db, video.id, runId, errorText, options);
     await options.onStageChange?.("failed");
 
     return {
@@ -286,13 +311,14 @@ export async function retryPipeline(
     },
     select: {
       pipelineStage: true,
+      pipelineLeaseHeartbeatAt: true,
     },
   });
 
   if (!video) {
     throw new Error(`Video ${videoId} does not exist.`);
   }
-  if (video.pipelineStage !== "failed") {
+  if (!canRetryPipelineStage(video, options.now)) {
     throw new PipelineRetryNotAllowedError(videoId, video.pipelineStage);
   }
 
@@ -328,10 +354,83 @@ function shouldRun(
   return STAGE_INDEX[current] <= STAGE_INDEX[target];
 }
 
+export function isActivePipelineStage(
+  stage: string | null | undefined,
+): stage is ActivePipelineStage {
+  return (
+    isPipelineStage(stage) &&
+    stage !== "done" &&
+    stage !== "failed"
+  );
+}
+
+export function canRetryPipelineStage(
+  video: {
+    pipelineStage: string | null;
+    pipelineLeaseHeartbeatAt: Date | null;
+  },
+  now: Date = new Date(),
+): boolean {
+  if (video.pipelineStage === "failed") {
+    return true;
+  }
+
+  return (
+    isActivePipelineStage(video.pipelineStage) &&
+    isWorkflowLeaseExpired(video.pipelineLeaseHeartbeatAt, now)
+  );
+}
+
 async function setPipelineStage(
   db: PrismaClient,
   videoId: string,
+  runId: string,
   stage: Exclude<PipelineStage, "failed">,
+  options: PipelineOptions,
+): Promise<void> {
+  const data: Prisma.VideoUpdateManyMutationInput = {
+    pipelineStage: stage,
+    pipelineError: null,
+    pipelineRunId: runId,
+    pipelineLeaseHeartbeatAt: options.now ?? new Date(),
+  };
+
+  if (isActivePipelineStage(stage)) {
+    const video = await db.video.findUniqueOrThrow({
+      where: {
+        id: videoId,
+      },
+      select: {
+        pipelineRunId: true,
+        pipelineStageAttempts: true,
+      },
+    });
+    if (video.pipelineRunId !== runId) {
+      throw new WorkflowLeaseLostError("Pipeline", videoId);
+    }
+    data.pipelineStageAttempts = incrementStageAttempt(
+      video.pipelineStageAttempts,
+      stage,
+    );
+  }
+
+  const updated = await db.video.updateMany({
+    where: {
+      id: videoId,
+      pipelineRunId: runId,
+    },
+    data,
+  });
+  if (updated.count !== 1) {
+    throw new WorkflowLeaseLostError("Pipeline", videoId);
+  }
+  await options.onStageChange?.(stage);
+}
+
+async function claimPipelineRun(
+  db: PrismaClient,
+  videoId: string,
+  runId: string,
   options: PipelineOptions,
 ): Promise<void> {
   await db.video.update({
@@ -339,11 +438,53 @@ async function setPipelineStage(
       id: videoId,
     },
     data: {
-      pipelineStage: stage,
-      pipelineError: null,
+      pipelineRunId: runId,
+      pipelineLeaseHeartbeatAt: options.now ?? new Date(),
     },
   });
-  await options.onStageChange?.(stage);
+}
+
+async function heartbeatPipelineRun(
+  db: PrismaClient,
+  videoId: string,
+  runId: string,
+  options: PipelineOptions,
+): Promise<void> {
+  const updated = await db.video.updateMany({
+    where: {
+      id: videoId,
+      pipelineRunId: runId,
+    },
+    data: {
+      pipelineLeaseHeartbeatAt: options.now ?? new Date(),
+    },
+  });
+  if (updated.count !== 1) {
+    throw new WorkflowLeaseLostError("Pipeline", videoId);
+  }
+}
+
+async function markPipelineFailed(
+  db: PrismaClient,
+  videoId: string,
+  runId: string,
+  errorText: string,
+  options: PipelineOptions,
+): Promise<void> {
+  const updated = await db.video.updateMany({
+    where: {
+      id: videoId,
+      pipelineRunId: runId,
+    },
+    data: {
+      pipelineStage: "failed",
+      pipelineError: errorText,
+      pipelineLeaseHeartbeatAt: options.now ?? new Date(),
+    },
+  });
+  if (updated.count !== 1) {
+    throw new WorkflowLeaseLostError("Pipeline", videoId);
+  }
 }
 
 async function assertCandidateClips(
@@ -452,6 +593,7 @@ async function captionAcceptedClipsMissingPostCopy(
   db: PrismaClient,
   videoId: string,
   creatorId: string,
+  runId: string,
   captionImpl: CaptionClipImpl,
   options: PipelineOptions,
   captionedClipIds: string[],
@@ -482,10 +624,15 @@ async function captionAcceptedClipsMissingPostCopy(
   });
 
   for (const clip of clips) {
-    const captionResult = await captionImpl(clip.id, {
-      ...options.captionOptions,
-      prismaClient: db,
-    });
+    const captionResult = await withWorkflowHeartbeat(
+      () => heartbeatPipelineRun(db, videoId, runId, options),
+      () =>
+        captionImpl(clip.id, {
+          ...options.captionOptions,
+          prismaClient: db,
+        }),
+      options.heartbeatIntervalMs,
+    );
     assertCaptioned(captionResult, clip.id);
     captionedClipIds.push(clip.id);
   }
@@ -530,7 +677,9 @@ function toRetryableStage(
     : "transcribing";
 }
 
-function isPipelineStage(stage: string | null): stage is PipelineStage {
+function isPipelineStage(
+  stage: string | null | undefined,
+): stage is PipelineStage {
   return PIPELINE_STAGES.includes(stage as PipelineStage);
 }
 

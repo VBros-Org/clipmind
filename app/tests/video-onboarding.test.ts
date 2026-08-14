@@ -126,6 +126,65 @@ test("Mind onboarding failure leaves profile and uploaded corpus intact", async 
   }
 });
 
+test("learning_voice with malformed stored Tenets fails retryably instead of wedging", async () => {
+  const fixture = await createFixture();
+
+  try {
+    await prisma.creator.update({
+      where: {
+        id: fixture.creatorId,
+      },
+      data: {
+        mindStage: "learning_voice",
+        initialTenets: {
+          version: "bad-tenets",
+        },
+      },
+    });
+
+    const result = await runFirstVideoOnboardingPipeline(fixture.videoId, {
+      prismaClient: prisma,
+      storage: {
+        async presignSourceUrl(sourceKey) {
+          return `https://signed.example/${sourceKey}`;
+        },
+      },
+      async transcribeItem() {
+        throw new Error("transcriber unavailable after restart");
+      },
+      async distillTenets() {
+        throw new Error("distill should wait for transcript");
+      },
+      mindsClient: null,
+      async runPipelineImpl() {
+        throw new Error("normal pipeline should not run after failed learning");
+      },
+    });
+
+    assert.equal(result.status, "failed");
+    assert.equal(result.failedStage, "learning_voice");
+    assert.match(result.error, /^learning_voice: transcriber unavailable/);
+
+    const creator = await prisma.creator.findUniqueOrThrow({
+      where: {
+        id: fixture.creatorId,
+      },
+      select: {
+        mindStage: true,
+        mindError: true,
+        mindStageAttempts: true,
+      },
+    });
+    assert.equal(creator.mindStage, "failed");
+    assert.match(creator.mindError ?? "", /^learning_voice: /);
+    assert.deepEqual(creator.mindStageAttempts, {
+      learning_voice: 1,
+    });
+  } finally {
+    await cleanupFixture(fixture.creatorId);
+  }
+});
+
 async function createFixture() {
   const marker = `video-onboarding-${Date.now()}-${Math.random()
     .toString(36)

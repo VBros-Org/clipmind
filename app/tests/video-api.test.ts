@@ -1117,6 +1117,154 @@ test("retry endpoint is creator scoped for failed Mind onboarding", async () => 
   }
 });
 
+test("retry endpoint accepts an expired active pipeline stage", async () => {
+  const fixture = await createFixture();
+  const retryCalls: string[] = [];
+
+  try {
+    const video = await createVideo(fixture, {
+      pipelineStage: "ranking",
+      pipelineLeaseHeartbeatAt: new Date("2026-08-14T09:00:00.000Z"),
+      clipCount: 1,
+    });
+    fixture.videoId = video.id;
+
+    const response = await handleRetryVideo(
+      requestWithCode(video.id, fixture.creatorACode, "POST"),
+      { id: video.id },
+      {
+        now: new Date("2026-08-14T09:11:00.000Z"),
+        async retryPipelineImpl(videoId) {
+          retryCalls.push(videoId);
+          return {
+            status: "done",
+            videoId,
+            creatorId: fixture.creatorAId,
+            clipCount: 1,
+            captionedClipIds: [],
+          };
+        },
+      },
+    );
+
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), {
+      videoId: video.id,
+      retrying: true,
+      stage: "ranking",
+    });
+    assert.deepEqual(retryCalls, [video.id]);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("retry endpoint starts the original uploaded video after alternate Mind repair", async () => {
+  const fixture = await createFixture();
+  const retryCalls: string[] = [];
+
+  try {
+    const video = await createVideo(fixture, {
+      pipelineStage: "uploaded",
+      pipelineLeaseHeartbeatAt: new Date("2026-08-14T09:00:00.000Z"),
+      status: "uploaded",
+      clipCount: 0,
+    });
+    fixture.videoId = video.id;
+    await prisma.creator.update({
+      where: {
+        id: fixture.creatorAId,
+      },
+      data: {
+        mindId: "mind-repaired-elsewhere",
+        mindStage: "ready",
+        mindError: null,
+      },
+    });
+
+    const response = await handleRetryVideo(
+      requestWithCode(video.id, fixture.creatorACode, "POST"),
+      { id: video.id },
+      {
+        now: new Date("2026-08-14T09:11:00.000Z"),
+        async retryPipelineImpl(videoId) {
+          retryCalls.push(videoId);
+          return {
+            status: "done",
+            videoId,
+            creatorId: fixture.creatorAId,
+            clipCount: 0,
+            captionedClipIds: [],
+          };
+        },
+      },
+    );
+
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), {
+      videoId: video.id,
+      retrying: true,
+      stage: "uploaded",
+    });
+    assert.deepEqual(retryCalls, [video.id]);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("retry endpoint accepts expired active Mind onboarding", async () => {
+  const fixture = await createFixture();
+  const retryCalls: string[] = [];
+
+  try {
+    const video = await createVideo(fixture, {
+      pipelineStage: "uploaded",
+      status: "uploaded",
+      clipCount: 0,
+    });
+    fixture.videoId = video.id;
+    await prisma.creator.update({
+      where: {
+        id: fixture.creatorAId,
+      },
+      data: {
+        mindId: null,
+        mindStage: "learning_voice",
+        mindError: null,
+        mindLeaseHeartbeatAt: new Date("2026-08-14T09:00:00.000Z"),
+      },
+    });
+
+    const response = await handleRetryVideo(
+      requestWithCode(video.id, fixture.creatorACode, "POST"),
+      { id: video.id },
+      {
+        now: new Date("2026-08-14T09:11:00.000Z"),
+        async runFirstVideoOnboardingPipelineImpl(videoId) {
+          retryCalls.push(videoId);
+          return {
+            status: "failed",
+            videoId,
+            creatorId: fixture.creatorAId,
+            failedStage: "learning_voice",
+            error: "learning_voice: previous process exited",
+          };
+        },
+      },
+    );
+
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), {
+      videoId: video.id,
+      retrying: true,
+      stage: "learning_voice",
+    });
+    assert.deepEqual(retryCalls, [video.id]);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
 async function createFixture(): Promise<VideoApiFixture> {
   const marker = `video-api-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const creatorA = await prisma.creator.create({
@@ -1147,18 +1295,31 @@ async function createVideo(
   args: {
     pipelineStage: string;
     pipelineError?: string | null;
+    pipelineLeaseHeartbeatAt?: Date | null;
+    status?: string;
     clipCount: number;
   },
 ) {
   const marker = `video-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const hasLeaseOverride = Object.prototype.hasOwnProperty.call(
+    args,
+    "pipelineLeaseHeartbeatAt",
+  );
+  const activeStage =
+    args.pipelineStage !== "done" && args.pipelineStage !== "failed";
   const video = await prisma.video.create({
     data: {
       creatorId: fixture.creatorAId,
       contentKey: `${marker}-content`,
       sourceKey: `videos/${marker}/source.mp4`,
-      status: "clipped",
+      status: args.status ?? "clipped",
       pipelineStage: args.pipelineStage,
       pipelineError: args.pipelineError ?? null,
+      pipelineLeaseHeartbeatAt: hasLeaseOverride
+        ? args.pipelineLeaseHeartbeatAt
+        : activeStage
+          ? new Date()
+          : null,
     },
   });
 

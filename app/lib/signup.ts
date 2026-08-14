@@ -5,6 +5,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import {
   channelPullErrorCode,
   friendlyChannelPullError,
+  isActiveChannelPullStage,
   isChannelPullStage,
   type ChannelPullStatusView,
 } from "./channel-pull-status";
@@ -16,6 +17,10 @@ import {
   readCookieValue,
 } from "./review-auth";
 import { normalizeCreatorTimezone } from "./timezone";
+import {
+  isWorkflowLeaseExpired,
+  workflowLeaseExpiredError,
+} from "./workflow-lease";
 
 export const SIGNUP_CREATOR_COOKIE = "clipmind_signup_creator";
 const SIGNUP_CREATOR_COOKIE_MAX_AGE_SECONDS = 60 * 30;
@@ -205,6 +210,7 @@ export async function loadSignupSessionState(
       captionCorpus: true,
       channelPullStage: true,
       channelPullError: true,
+      channelPullLeaseHeartbeatAt: true,
       inviteCode: {
         select: {
           id: true,
@@ -228,6 +234,8 @@ export async function loadSignupSessionState(
     channelPullStatus: channelPullStatusFromCreator(
       creator.channelPullStage,
       creator.channelPullError,
+      creator.channelPullLeaseHeartbeatAt,
+      options.now,
     ),
   };
 
@@ -477,12 +485,19 @@ function captionPresetFromStyle(style: Prisma.JsonValue): CaptionPresetId {
 function channelPullStatusFromCreator(
   rawStage: string | null,
   rawError: string | null,
+  leaseHeartbeatAt: Date | null,
+  now: Date = new Date(),
 ): ChannelPullStatusView {
   const stage = isChannelPullStage(rawStage) ? rawStage : null;
+  const error =
+    stage && isActiveChannelPullStage(stage) &&
+    isWorkflowLeaseExpired(leaseHeartbeatAt, now)
+      ? workflowLeaseExpiredError(stage)
+      : rawError;
   return {
-    stage,
-    error: stage === "failed" ? friendlyChannelPullError(rawError) : null,
-    errorCode: channelPullErrorCode(rawError),
+    stage: error && stage !== "done" ? "failed" : stage,
+    error: error ? friendlyChannelPullError(error) : null,
+    errorCode: channelPullErrorCode(error),
   };
 }
 
