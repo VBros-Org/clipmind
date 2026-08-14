@@ -26,6 +26,24 @@ import styles from "./signup.module.css";
 type SignupStep = "invite" | "profile" | "access" | "corpus";
 type SignupError = string | null;
 const CHANNEL_PULL_POLL_MS = 3_000;
+const CORPUS_STEP_KEY_PREFIX = "clipmind_signup_corpus_";
+
+type SignupFlowProps = {
+  resumeOnLoad?: boolean;
+};
+
+type SignupSessionResponse = {
+  step: "invite" | "profile" | "access";
+  creatorId: string | null;
+  accessCode?: string;
+  profile?: {
+    displayName: string;
+    channelUrl: string;
+    captionPreset: string;
+    captionCorpus: string;
+    channelPullStatus: ChannelPullStatusView;
+  };
+};
 
 const CAPTION_PRESETS = [
   {
@@ -45,8 +63,10 @@ const CAPTION_PRESETS = [
   },
 ] as const;
 
-export function SignupFlow() {
+export function SignupFlow({ resumeOnLoad = false }: SignupFlowProps) {
   const [step, setStep] = useState<SignupStep>("invite");
+  const [resumeChecked, setResumeChecked] = useState(!resumeOnLoad);
+  const [signupCreatorId, setSignupCreatorId] = useState<string | null>(null);
   const [inviteCode, setInviteCode] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [channelUrl, setChannelUrl] = useState("");
@@ -70,6 +90,46 @@ export function SignupFlow() {
   const [busy, setBusy] = useState(false);
   const accessCodeRef = useRef<HTMLDivElement | null>(null);
   const channelPullLine = channelPullProgressLine(channelPullStatus);
+
+  useEffect(() => {
+    if (!resumeOnLoad) {
+      return;
+    }
+
+    let cancelled = false;
+    async function resumeSignup() {
+      try {
+        const response = await fetch("/api/signup/session", {
+          cache: "no-store",
+        });
+        const body = (await response.json().catch(() => null)) as
+          | SignupSessionResponse
+          | null;
+
+        if (!response.ok || !body) {
+          throw new Error("Signup could not be resumed.");
+        }
+
+        if (!cancelled) {
+          applySignupSession(body);
+        }
+      } catch (requestError) {
+        if (!cancelled) {
+          setError(errorMessage(requestError));
+          setStep("invite");
+        }
+      } finally {
+        if (!cancelled) {
+          setResumeChecked(true);
+        }
+      }
+    }
+
+    void resumeSignup();
+    return () => {
+      cancelled = true;
+    };
+  }, [resumeOnLoad]);
 
   useEffect(() => {
     if (!isActiveChannelPullStage(channelPullStatus.stage)) {
@@ -111,13 +171,17 @@ export function SignupFlow() {
         }),
       });
       const body = (await response.json().catch(() => null)) as
-        | { error?: string }
+        | {
+            creatorId?: string;
+            error?: string;
+          }
         | null;
 
       if (!response.ok) {
         throw new Error(body?.error ?? "Invite code did not work.");
       }
 
+      setSignupCreatorId(body?.creatorId ?? null);
       setStep("profile");
     } catch (requestError) {
       setError(errorMessage(requestError));
@@ -147,6 +211,7 @@ export function SignupFlow() {
       const body = (await response.json().catch(() => null)) as
         | {
             accessCode?: string;
+            creatorId?: string;
             error?: string;
           }
         | null;
@@ -156,6 +221,7 @@ export function SignupFlow() {
       }
 
       setAccessCode(body.accessCode);
+      setSignupCreatorId(body.creatorId ?? null);
       setChannelPullUrl(channelUrl);
       setStep("access");
       window.setTimeout(() => accessCodeRef.current?.focus(), 0);
@@ -224,6 +290,40 @@ export function SignupFlow() {
     }
   }
 
+  function continueToCorpus() {
+    if (signupCreatorId) {
+      window.sessionStorage.setItem(corpusStepKey(signupCreatorId), "1");
+    }
+    setStep("corpus");
+  }
+
+  function applySignupSession(session: SignupSessionResponse) {
+    setSignupCreatorId(session.creatorId);
+    if (session.profile) {
+      setDisplayName(session.profile.displayName);
+      setChannelUrl(session.profile.channelUrl);
+      setChannelPullUrl(session.profile.channelUrl);
+      setCaptionPreset(session.profile.captionPreset);
+      setCaptionCorpus(session.profile.captionCorpus);
+      setChannelPullStatus(session.profile.channelPullStatus);
+    }
+    if (session.accessCode) {
+      setAccessCode(session.accessCode);
+    }
+
+    if (session.step === "access") {
+      setStep(
+        session.creatorId &&
+          window.sessionStorage.getItem(corpusStepKey(session.creatorId)) === "1"
+          ? "corpus"
+          : "access",
+      );
+      return;
+    }
+
+    setStep(session.step);
+  }
+
   return (
     <section className={styles.panel} aria-labelledby="signup-title">
       <p className={styles.eyebrow}>Invite signup</p>
@@ -233,7 +333,13 @@ export function SignupFlow() {
 
       <StepDots activeStep={step} />
 
-      {step === "invite" ? (
+      {!resumeChecked ? (
+        <section className={styles.form} aria-live="polite">
+          <p className={styles.copy}>Loading signup.</p>
+        </section>
+      ) : null}
+
+      {resumeChecked && step === "invite" ? (
         <form className={styles.form} onSubmit={claimInvite}>
           <label className={styles.label}>
             Invite code
@@ -252,7 +358,7 @@ export function SignupFlow() {
         </form>
       ) : null}
 
-      {step === "profile" ? (
+      {resumeChecked && step === "profile" ? (
         <form className={styles.form} onSubmit={createAccount}>
           <label className={styles.label}>
             Display name
@@ -308,7 +414,7 @@ export function SignupFlow() {
         </form>
       ) : null}
 
-      {step === "access" ? (
+      {resumeChecked && step === "access" ? (
         <section className={styles.accessStep}>
           <p className={styles.copy}>save this somewhere safe, it is your login</p>
           <div
@@ -323,7 +429,7 @@ export function SignupFlow() {
           </button>
           <button
             className={styles.secondaryButton}
-            onClick={() => setStep("corpus")}
+            onClick={continueToCorpus}
             type="button"
           >
             Continue
@@ -331,7 +437,7 @@ export function SignupFlow() {
         </section>
       ) : null}
 
-      {step === "corpus" ? (
+      {resumeChecked && step === "corpus" ? (
         <section className={styles.corpusStep}>
           <div className={styles.corpusHeader}>
             <h2>Upload a long video so your Mind can learn your voice</h2>
@@ -440,4 +546,8 @@ function StepDots({ activeStep }: { activeStep: SignupStep }) {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function corpusStepKey(creatorId: string): string {
+  return `${CORPUS_STEP_KEY_PREFIX}${creatorId}`;
 }
