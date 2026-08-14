@@ -276,10 +276,9 @@ async def cut_clip(
         except RenderOutputValidationError as exc:
             if cut_request.source_url is None:
                 raise _render_output_http_exception(exc) from exc
-            logger.error(
-                "FFMPEG_URL_INPUT_FAILED_FALLING_BACK_TO_FULL_DOWNLOAD for /cut",
-                exc_info=True,
-            )
+            logger.exception(
+                "FFMPEG_URL_INPUT_FAILED_FALLING_BACK_TO_FULL_DOWNLOAD for /cut"
+                )
             fallback_request = _download_cut_fallback(cut_request, temp_dir)
             try:
                 output_path, duration_ms = _render_cut_response_file(
@@ -292,10 +291,9 @@ async def cut_clip(
         except RuntimeError:
             if cut_request.source_url is None:
                 raise
-            logger.error(
-                "FFMPEG_URL_INPUT_FAILED_FALLING_BACK_TO_FULL_DOWNLOAD for /cut",
-                exc_info=True,
-            )
+            logger.exception(
+                "FFMPEG_URL_INPUT_FAILED_FALLING_BACK_TO_FULL_DOWNLOAD for /cut"
+                )
             fallback_request = _download_cut_fallback(cut_request, temp_dir)
             try:
                 output_path, duration_ms = _render_cut_response_file(
@@ -338,10 +336,9 @@ async def thumbnail(
         except RuntimeError:
             if thumbnail_request.source_url is None:
                 raise
-            logger.error(
-                "FFMPEG_URL_INPUT_FAILED_FALLING_BACK_TO_FULL_DOWNLOAD for /thumbnail",
-                exc_info=True,
-            )
+            logger.exception(
+                "FFMPEG_URL_INPUT_FAILED_FALLING_BACK_TO_FULL_DOWNLOAD for /thumbnail"
+                )
             fallback_request = _download_thumbnail_fallback(thumbnail_request, temp_dir)
             output_path = _render_thumbnail_response_file(
                 fallback_request,

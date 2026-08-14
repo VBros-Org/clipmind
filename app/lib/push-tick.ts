@@ -13,6 +13,7 @@ import { scheduleSettingsFromRow } from "./schedule-settings";
 export type PushTickOptions = {
   prismaClient?: PushTickDbClient;
   sendPushNudgeToCreatorImpl?: typeof sendPushNudgeToCreator;
+  creatorIds?: string[];
 };
 
 type PushTickDbClient = PrismaClient | Prisma.TransactionClient;
@@ -37,7 +38,9 @@ export async function runPushTick(
   const db = options.prismaClient ?? prisma;
   const sendPush =
     options.sendPushNudgeToCreatorImpl ?? sendPushNudgeToCreator;
-  const creators = await loadPushNudgeCreatorStates(db, now);
+  const creators = await loadPushNudgeCreatorStates(db, now, {
+    creatorIds: options.creatorIds,
+  });
   const result: PushTickResult = {
     status: "done",
     creatorsChecked: creators.length,
@@ -110,9 +113,21 @@ export async function runPushTick(
 async function loadPushNudgeCreatorStates(
   db: PushTickDbClient,
   now: Date,
+  options: {
+    creatorIds?: string[];
+  } = {},
 ): Promise<NudgeCreatorState[]> {
+  const creatorIdWhere: Prisma.CreatorWhereInput = options.creatorIds
+    ? {
+        id: {
+          in: options.creatorIds,
+        },
+      }
+    : {};
+
   const creators = await db.creator.findMany({
     where: {
+      ...creatorIdWhere,
       OR: [
         {
           schedule: {

@@ -311,7 +311,7 @@ def loudness_samples(video_path: Path) -> list[LoudnessSample]:
 
     samples: list[LoudnessSample] = []
     for match in LOUDNESS_RE.finditer(result.stderr):
-        time_ms = int(round(float(match.group("time")) * 1000))
+        time_ms = round(float(match.group("time")) * 1000)
         momentary = float(match.group("momentary"))
         samples.append(LoudnessSample(time_ms=time_ms, momentary_lufs=momentary))
 

@@ -206,7 +206,7 @@ def validate_rendered_video(output_path: Path, expected_duration_ms: int) -> Non
         )
 
     try:
-        actual_duration_ms = int(round(float(duration_seconds) * 1000))
+        actual_duration_ms = round(float(duration_seconds) * 1000)
     except (TypeError, ValueError) as exc:
         raise RenderOutputValidationError(
             "render_duration_invalid",
@@ -221,7 +221,7 @@ def validate_rendered_video(output_path: Path, expected_duration_ms: int) -> Non
 
     tolerance_ms = max(
         RENDER_DURATION_TOLERANCE_MS,
-        int(round(expected_duration_ms * 0.10)),
+        round(expected_duration_ms * 0.10),
     )
     lower_bound_ms = max(1, expected_duration_ms - tolerance_ms)
     upper_bound_ms = expected_duration_ms + tolerance_ms

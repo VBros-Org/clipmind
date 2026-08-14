@@ -1,3 +1,5 @@
+import "./helpers/db-test-guard";
+
 import assert from "node:assert/strict";
 
 import { prisma } from "../lib/db";

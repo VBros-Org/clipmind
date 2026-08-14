@@ -1,3 +1,5 @@
+import "./helpers/db-test-guard";
+
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -22,8 +24,6 @@ type SignupFixture = {
   code: string;
   creatorIds: string[];
 };
-
-assertSafeTestDatabase();
 
 test("invite claim is atomic and rejects double use", async () => {
   const fixture = await createInviteFixture();
@@ -477,29 +477,4 @@ function createBarrier(parties: number): () => Promise<void> {
     }
     await promise;
   };
-}
-
-function assertSafeTestDatabase(): void {
-  const rawUrl = process.env.DATABASE_URL;
-  if (!rawUrl) {
-    throw new Error("DATABASE_URL is required for signup DB tests.");
-  }
-
-  let url: URL;
-  try {
-    url = new URL(rawUrl);
-  } catch {
-    throw new Error("DATABASE_URL must be a valid Postgres URL.");
-  }
-
-  const localHosts = new Set(["localhost", "127.0.0.1", "::1"]);
-  if (
-    url.protocol !== "postgresql:" ||
-    !localHosts.has(url.hostname) ||
-    url.pathname !== "/clipmind_dev"
-  ) {
-    throw new Error(
-      "Refusing to run signup DB tests outside localhost/clipmind_dev.",
-    );
-  }
 }

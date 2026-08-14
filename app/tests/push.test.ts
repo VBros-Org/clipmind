@@ -1,3 +1,5 @@
+import "./helpers/db-test-guard";
+
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import test from "node:test";
@@ -45,15 +47,12 @@ test("push tick rejects a bad CRON_SECRET", async () => {
 
 test("push tick dedupes the same nudge key", async () => {
   const fixture = await createPushFixture("dedupe");
-  const disabledCreatorIds = await disableOtherPushSchedules([fixture.creatorId]);
-  const disabledSubscriptionIds = await disableOtherPushSubscriptions([
-    fixture.creatorId,
-  ]);
   const now = new Date("2026-07-29T09:05:00.000Z");
   let sendCalls = 0;
 
   try {
     const first = await runPushTick(now, {
+      creatorIds: [fixture.creatorId],
       prismaClient: prisma,
       sendPushNudgeToCreatorImpl: async (creatorId, nudge) => {
         sendCalls += 1;
@@ -69,15 +68,18 @@ test("push tick dedupes the same nudge key", async () => {
         };
       },
     });
+    assert.equal(first.creatorsChecked, 1);
     assert.equal(first.sent, 1);
     assert.equal(first.skippedDuplicate, 0);
 
     const second = await runPushTick(now, {
+      creatorIds: [fixture.creatorId],
       prismaClient: prisma,
       sendPushNudgeToCreatorImpl: async () => {
         throw new Error("Duplicate tick should not send.");
       },
     });
+    assert.equal(second.creatorsChecked, 1);
     assert.equal(second.sent, 0);
     assert.equal(second.skippedDuplicate, 1);
     assert.equal(sendCalls, 1);
@@ -92,23 +94,18 @@ test("push tick dedupes the same nudge key", async () => {
     });
     assert.equal(logCount, 1);
   } finally {
-    await restorePushSubscriptions(disabledSubscriptionIds);
-    await restorePushSchedules(disabledCreatorIds);
     await cleanupPushFixture(fixture);
   }
 });
 
 test("push tick sends failed upload nudges once when push reminders are off", async () => {
   const fixture = await createFailedPushFixture("failed-always-on");
-  const disabledCreatorIds = await disableOtherPushSchedules([fixture.creatorId]);
-  const disabledSubscriptionIds = await disableOtherPushSubscriptions([
-    fixture.creatorId,
-  ]);
   const now = new Date("2026-07-29T09:15:00.000Z");
   let sendCalls = 0;
 
   try {
     const first = await runPushTick(now, {
+      creatorIds: [fixture.creatorId],
       prismaClient: prisma,
       sendPushNudgeToCreatorImpl: async (creatorId, nudge) => {
         sendCalls += 1;
@@ -129,15 +126,18 @@ test("push tick sends failed upload nudges once when push reminders are off", as
         };
       },
     });
+    assert.equal(first.creatorsChecked, 1);
     assert.equal(first.sent, 1);
     assert.equal(first.skippedDuplicate, 0);
 
     const second = await runPushTick(now, {
+      creatorIds: [fixture.creatorId],
       prismaClient: prisma,
       sendPushNudgeToCreatorImpl: async () => {
         throw new Error("Duplicate failure should not send.");
       },
     });
+    assert.equal(second.creatorsChecked, 1);
     assert.equal(second.sent, 0);
     assert.equal(second.skippedDuplicate, 1);
     assert.equal(sendCalls, 1);
@@ -152,8 +152,6 @@ test("push tick sends failed upload nudges once when push reminders are off", as
     });
     assert.equal(logCount, 1);
   } finally {
-    await restorePushSubscriptions(disabledSubscriptionIds);
-    await restorePushSchedules(disabledCreatorIds);
     await cleanupPushFixture(fixture);
   }
 });
@@ -165,39 +163,32 @@ test("push tick does not nudge scheduled clips until render and captions are rea
   const captionless = await createPushFixture("captionless", {
     postCopyVariants: null,
   });
-  const disabledCreatorIds = await disableOtherPushSchedules([
-    unrendered.creatorId,
-    captionless.creatorId,
-  ]);
-  const disabledSubscriptionIds = await disableOtherPushSubscriptions([
-    unrendered.creatorId,
-    captionless.creatorId,
-  ]);
+  const fixtureCreatorIds = [unrendered.creatorId, captionless.creatorId];
   const now = new Date("2026-07-29T09:05:00.000Z");
 
   try {
     const result = await runPushTick(now, {
+      creatorIds: fixtureCreatorIds,
       prismaClient: prisma,
       sendPushNudgeToCreatorImpl: async () => {
         throw new Error("Unready scheduled clips should not send post nudges.");
       },
     });
 
+    assert.equal(result.creatorsChecked, 2);
     assert.equal(result.nudgesDue, 0);
     assert.equal(result.sent, 0);
 
     const postLogs = await prisma.nudgeLog.count({
       where: {
         creatorId: {
-          in: [unrendered.creatorId, captionless.creatorId],
+          in: fixtureCreatorIds,
         },
         kind: "post",
       },
     });
     assert.equal(postLogs, 0);
   } finally {
-    await restorePushSubscriptions(disabledSubscriptionIds);
-    await restorePushSchedules(disabledCreatorIds);
     await cleanupPushFixture(captionless);
     await cleanupPushFixture(unrendered);
   }
@@ -205,10 +196,6 @@ test("push tick does not nudge scheduled clips until render and captions are rea
 
 test("guarded push ticks reject overlaps and release the lock after the tick", async () => {
   const fixture = await createPushFixture("guard-overlap");
-  const disabledCreatorIds = await disableOtherPushSchedules([fixture.creatorId]);
-  const disabledSubscriptionIds = await disableOtherPushSubscriptions([
-    fixture.creatorId,
-  ]);
   const now = new Date("2026-07-29T09:05:00.000Z");
   let sendCalls = 0;
   let releaseSend: () => void = () => {};
@@ -219,6 +206,7 @@ test("guarded push ticks reject overlaps and release the lock after the tick", a
 
   try {
     const firstTick = runPushTickWithAdvisoryLock(now, {
+      creatorIds: [fixture.creatorId],
       prismaClient: prisma,
       sendPushNudgeToCreatorImpl: async (creatorId) => {
         sendCalls += 1;
@@ -232,6 +220,7 @@ test("guarded push ticks reject overlaps and release the lock after the tick", a
     await sendStarted.promise;
 
     const overlapped = await runPushTickWithAdvisoryLock(now, {
+      creatorIds: [fixture.creatorId],
       prismaClient: prisma,
       sendPushNudgeToCreatorImpl: async () => {
         throw new Error("Locked tick should not send.");
@@ -242,21 +231,22 @@ test("guarded push ticks reject overlaps and release the lock after the tick", a
     releaseSend();
     const first = await firstTick;
     assert.equal(first.status, "done");
+    assert.equal(first.creatorsChecked, 1);
     assert.equal(first.sent, 1);
     assert.equal(sendCalls, 1);
 
     const after = await runPushTickWithAdvisoryLock(now, {
+      creatorIds: [fixture.creatorId],
       prismaClient: prisma,
       sendPushNudgeToCreatorImpl: async () => {
         throw new Error("Sent duplicate should not send.");
       },
     });
     assert.equal(after.status, "done");
+    assert.equal(after.creatorsChecked, 1);
     assert.equal(after.skippedDuplicate, 1);
   } finally {
     releaseSend();
-    await restorePushSubscriptions(disabledSubscriptionIds);
-    await restorePushSchedules(disabledCreatorIds);
     await cleanupPushFixture(fixture);
   }
 });
@@ -264,18 +254,12 @@ test("guarded push ticks reject overlaps and release the lock after the tick", a
 test("a throwing creator does not block others or consume the reservation", async () => {
   const throwing = await createPushFixture("throwing-creator");
   const healthy = await createPushFixture("healthy-creator");
-  const disabledCreatorIds = await disableOtherPushSchedules([
-    throwing.creatorId,
-    healthy.creatorId,
-  ]);
-  const disabledSubscriptionIds = await disableOtherPushSubscriptions([
-    throwing.creatorId,
-    healthy.creatorId,
-  ]);
+  const fixtureCreatorIds = [throwing.creatorId, healthy.creatorId];
   const now = new Date("2026-07-29T09:05:00.000Z");
 
   try {
     const first = await runPushTick(now, {
+      creatorIds: fixtureCreatorIds,
       prismaClient: prisma,
       sendPushNudgeToCreatorImpl: async (creatorId) => {
         if (creatorId === throwing.creatorId) {
@@ -286,6 +270,7 @@ test("a throwing creator does not block others or consume the reservation", asyn
       },
     });
 
+    assert.equal(first.creatorsChecked, 2);
     assert.equal(first.sent, 1);
     assert.equal(first.failures, 1);
 
@@ -307,6 +292,7 @@ test("a throwing creator does not block others or consume the reservation", asyn
 
     const retriedCreators: string[] = [];
     const second = await runPushTick(now, {
+      creatorIds: fixtureCreatorIds,
       prismaClient: prisma,
       sendPushNudgeToCreatorImpl: async (creatorId) => {
         retriedCreators.push(creatorId);
@@ -314,6 +300,7 @@ test("a throwing creator does not block others or consume the reservation", asyn
       },
     });
 
+    assert.equal(second.creatorsChecked, 2);
     assert.equal(second.sent, 1);
     assert.equal(second.skippedDuplicate, 1);
     assert.deepEqual(retriedCreators, [throwing.creatorId]);
@@ -326,8 +313,6 @@ test("a throwing creator does not block others or consume the reservation", asyn
     assert.equal(retriedLog?.status, "sent");
     assert.ok(retriedLog?.sentAt);
   } finally {
-    await restorePushSubscriptions(disabledSubscriptionIds);
-    await restorePushSchedules(disabledCreatorIds);
     await cleanupPushFixture(healthy);
     await cleanupPushFixture(throwing);
   }
@@ -335,10 +320,6 @@ test("a throwing creator does not block others or consume the reservation", asyn
 
 test("rescheduled clips re-nudge with a slot-timestamp dedupe key", async () => {
   const fixture = await createPushFixture("reschedule");
-  const disabledCreatorIds = await disableOtherPushSchedules([fixture.creatorId]);
-  const disabledSubscriptionIds = await disableOtherPushSubscriptions([
-    fixture.creatorId,
-  ]);
   const firstNow = new Date("2026-07-29T09:05:00.000Z");
   const rescheduledFor = new Date("2026-07-29T13:00:00.000Z");
   const secondNow = new Date("2026-07-29T13:05:00.000Z");
@@ -346,12 +327,14 @@ test("rescheduled clips re-nudge with a slot-timestamp dedupe key", async () => 
 
   try {
     const first = await runPushTick(firstNow, {
+      creatorIds: [fixture.creatorId],
       prismaClient: prisma,
       sendPushNudgeToCreatorImpl: async (creatorId, nudge) => {
         dedupeKeys.push(nudge.dedupeKey);
         return sentPushResult(creatorId, "projects/test/messages/first-slot");
       },
     });
+    assert.equal(first.creatorsChecked, 1);
     assert.equal(first.sent, 1);
 
     await prisma.clip.update({
@@ -364,12 +347,14 @@ test("rescheduled clips re-nudge with a slot-timestamp dedupe key", async () => 
     });
 
     const second = await runPushTick(secondNow, {
+      creatorIds: [fixture.creatorId],
       prismaClient: prisma,
       sendPushNudgeToCreatorImpl: async (creatorId, nudge) => {
         dedupeKeys.push(nudge.dedupeKey);
         return sentPushResult(creatorId, "projects/test/messages/second-slot");
       },
     });
+    assert.equal(second.creatorsChecked, 1);
     assert.equal(second.sent, 1);
     assert.deepEqual(dedupeKeys, [
       postDedupeKey(fixture.clipId, DEFAULT_POST_SLOT),
@@ -385,29 +370,25 @@ test("rescheduled clips re-nudge with a slot-timestamp dedupe key", async () => 
     });
     assert.equal(logCount, 2);
   } finally {
-    await restorePushSubscriptions(disabledSubscriptionIds);
-    await restorePushSchedules(disabledCreatorIds);
     await cleanupPushFixture(fixture);
   }
 });
 
 test("failed upload retry generations re-nudge", async () => {
   const fixture = await createFailedPushFixture("retry-generation");
-  const disabledCreatorIds = await disableOtherPushSchedules([fixture.creatorId]);
-  const disabledSubscriptionIds = await disableOtherPushSubscriptions([
-    fixture.creatorId,
-  ]);
   const now = new Date("2026-07-29T09:15:00.000Z");
   const dedupeKeys: string[] = [];
 
   try {
     const first = await runPushTick(now, {
+      creatorIds: [fixture.creatorId],
       prismaClient: prisma,
       sendPushNudgeToCreatorImpl: async (creatorId, nudge) => {
         dedupeKeys.push(nudge.dedupeKey);
         return sentPushResult(creatorId, "projects/test/messages/failed-zero");
       },
     });
+    assert.equal(first.creatorsChecked, 1);
     assert.equal(first.sent, 1);
 
     await prisma.video.update({
@@ -422,35 +403,32 @@ test("failed upload retry generations re-nudge", async () => {
     });
 
     const second = await runPushTick(now, {
+      creatorIds: [fixture.creatorId],
       prismaClient: prisma,
       sendPushNudgeToCreatorImpl: async (creatorId, nudge) => {
         dedupeKeys.push(nudge.dedupeKey);
         return sentPushResult(creatorId, "projects/test/messages/failed-one");
       },
     });
+    assert.equal(second.creatorsChecked, 1);
     assert.equal(second.sent, 1);
     assert.deepEqual(dedupeKeys, [
       `${fixture.videoId}:0`,
       `${fixture.videoId}:1`,
     ]);
   } finally {
-    await restorePushSubscriptions(disabledSubscriptionIds);
-    await restorePushSchedules(disabledCreatorIds);
     await cleanupPushFixture(fixture);
   }
 });
 
 test("push tick sends pipeline done nudges keyed by video id", async () => {
   const fixture = await createDonePushFixture("pipeline-done");
-  const disabledCreatorIds = await disableOtherPushSchedules([fixture.creatorId]);
-  const disabledSubscriptionIds = await disableOtherPushSubscriptions([
-    fixture.creatorId,
-  ]);
   const now = new Date("2026-07-29T09:15:00.000Z");
   let sendCalls = 0;
 
   try {
     const result = await runPushTick(now, {
+      creatorIds: [fixture.creatorId],
       prismaClient: prisma,
       sendPushNudgeToCreatorImpl: async (creatorId, nudge) => {
         sendCalls += 1;
@@ -462,6 +440,7 @@ test("push tick sends pipeline done nudges keyed by video id", async () => {
       },
     });
 
+    assert.equal(result.creatorsChecked, 1);
     assert.equal(result.sent, 1);
     assert.equal(sendCalls, 1);
 
@@ -472,8 +451,6 @@ test("push tick sends pipeline done nudges keyed by video id", async () => {
     );
     assert.equal(log?.status, "sent");
   } finally {
-    await restorePushSubscriptions(disabledSubscriptionIds);
-    await restorePushSchedules(disabledCreatorIds);
     await cleanupPushFixture(fixture);
   }
 });
@@ -753,102 +730,6 @@ async function cleanupPushFixture(fixture: PushFixture): Promise<void> {
   await prisma.creator.delete({
     where: {
       id: fixture.creatorId,
-    },
-  });
-}
-
-async function disableOtherPushSchedules(
-  excludedCreatorIds: string[],
-): Promise<string[]> {
-  const schedules = await prisma.schedule.findMany({
-    where: {
-      creatorId: {
-        notIn: excludedCreatorIds,
-      },
-      pushNudges: true,
-    },
-    select: {
-      creatorId: true,
-    },
-  });
-  const creatorIds = schedules.map((schedule) => schedule.creatorId);
-  if (creatorIds.length > 0) {
-    await prisma.schedule.updateMany({
-      where: {
-        creatorId: {
-          in: creatorIds,
-        },
-      },
-      data: {
-        pushNudges: false,
-      },
-    });
-  }
-
-  return creatorIds;
-}
-
-async function restorePushSchedules(creatorIds: string[]): Promise<void> {
-  if (creatorIds.length === 0) {
-    return;
-  }
-
-  await prisma.schedule.updateMany({
-    where: {
-      creatorId: {
-        in: creatorIds,
-      },
-    },
-    data: {
-      pushNudges: true,
-    },
-  });
-}
-
-async function disableOtherPushSubscriptions(
-  excludedCreatorIds: string[],
-): Promise<string[]> {
-  const subscriptions = await prisma.pushSubscription.findMany({
-    where: {
-      creatorId: {
-        notIn: excludedCreatorIds,
-      },
-      disabledAt: null,
-    },
-    select: {
-      id: true,
-    },
-  });
-  const subscriptionIds = subscriptions.map((subscription) => subscription.id);
-  if (subscriptionIds.length > 0) {
-    await prisma.pushSubscription.updateMany({
-      where: {
-        id: {
-          in: subscriptionIds,
-        },
-      },
-      data: {
-        disabledAt: new Date("2026-07-29T00:00:00.000Z"),
-      },
-    });
-  }
-
-  return subscriptionIds;
-}
-
-async function restorePushSubscriptions(subscriptionIds: string[]): Promise<void> {
-  if (subscriptionIds.length === 0) {
-    return;
-  }
-
-  await prisma.pushSubscription.updateMany({
-    where: {
-      id: {
-        in: subscriptionIds,
-      },
-    },
-    data: {
-      disabledAt: null,
     },
   });
 }
