@@ -4,13 +4,16 @@ import type { PrismaClient } from "@prisma/client";
 
 import { prisma } from "./db";
 import { loadCreatorSessionFromCookieHeader } from "./review-auth";
-import { runPushTick, type PushTickResult } from "./push-tick";
+import {
+  runPushTickWithAdvisoryLock,
+  type LockedPushTickResult,
+} from "./push-tick-interval";
 
 type PushApiOptions = {
   prismaClient?: PrismaClient;
   now?: Date;
   env?: Record<string, string | undefined>;
-  runPushTickImpl?: typeof runPushTick;
+  runPushTickImpl?: typeof runPushTickWithAdvisoryLock;
 };
 
 export async function handlePushSubscribe(
@@ -86,8 +89,8 @@ export async function handlePushTick(
     return json({ error: auth.error }, auth.status);
   }
 
-  const runTick = options.runPushTickImpl ?? runPushTick;
-  const result: PushTickResult = await runTick(options.now ?? new Date(), {
+  const runTick = options.runPushTickImpl ?? runPushTickWithAdvisoryLock;
+  const result: LockedPushTickResult = await runTick(options.now ?? new Date(), {
     prismaClient: options.prismaClient,
   });
 

@@ -1,7 +1,11 @@
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 
 import { prisma } from "./db";
-import { runPushTick, type PushTickResult } from "./push-tick";
+import {
+  runPushTick,
+  type PushTickOptions,
+  type PushTickResult,
+} from "./push-tick";
 
 const PUSH_TICK_INTERVAL_MS = 5 * 60 * 1000;
 const FIRST_TICK_DELAY_MS = 30 * 1000;
@@ -41,25 +45,34 @@ export function startPushTickInterval(): void {
 
 export async function runPushTickWithAdvisoryLock(
   now: Date = new Date(),
-  options: { prismaClient?: PrismaClient } = {},
+  options: Omit<PushTickOptions, "prismaClient"> & {
+    prismaClient?: PrismaClient;
+  } = {},
 ): Promise<LockedPushTickResult> {
   const db = options.prismaClient ?? prisma;
-  const lockRows = await db.$queryRawUnsafe<Array<{ locked: boolean }>>(
-    "SELECT pg_try_advisory_lock(7019, 19) AS locked",
+  return db.$transaction(
+    async (tx) => {
+      const lockRows = await tx.$queryRawUnsafe<Array<{ locked: boolean }>>(
+        "SELECT pg_try_advisory_xact_lock(7019, 19) AS locked",
+      );
+      const locked = lockRows[0]?.locked === true;
+
+      if (!locked) {
+        return {
+          status: "locked",
+        };
+      }
+
+      return runPushTick(now, {
+        prismaClient: tx,
+        sendPushNudgeToCreatorImpl: options.sendPushNudgeToCreatorImpl,
+      });
+    },
+    {
+      isolationLevel:
+        "ReadCommitted" satisfies Prisma.TransactionIsolationLevel,
+      maxWait: 5_000,
+      timeout: 120_000,
+    },
   );
-  const locked = lockRows[0]?.locked === true;
-
-  if (!locked) {
-    return {
-      status: "locked",
-    };
-  }
-
-  try {
-    return await runPushTick(now, {
-      prismaClient: db,
-    });
-  } finally {
-    await db.$executeRawUnsafe("SELECT pg_advisory_unlock(7019, 19)");
-  }
 }

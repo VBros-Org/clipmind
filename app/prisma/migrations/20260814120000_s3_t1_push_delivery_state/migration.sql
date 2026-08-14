@@ -1,0 +1,10 @@
+ALTER TABLE "Video" ADD COLUMN "pipelineRetryGeneration" INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE "NudgeLog" ADD COLUMN "status" TEXT NOT NULL DEFAULT 'sent';
+ALTER TABLE "NudgeLog" ADD COLUMN "reservedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE "NudgeLog" ADD COLUMN "lastFailureAt" TIMESTAMP(3);
+ALTER TABLE "NudgeLog" ADD COLUMN "lastFailure" TEXT;
+ALTER TABLE "NudgeLog" ALTER COLUMN "sentAt" DROP DEFAULT;
+ALTER TABLE "NudgeLog" ALTER COLUMN "sentAt" DROP NOT NULL;
+
+CREATE INDEX "NudgeLog_status_reservedAt_idx" ON "NudgeLog"("status", "reservedAt");

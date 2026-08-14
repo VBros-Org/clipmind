@@ -10,7 +10,12 @@ import { formatCreatorLocalTime } from "./timezone";
 
 export const RUNWAY_WARNING_THRESHOLD_DAYS = DEFAULT_RUNWAY_THRESHOLD_DAYS;
 
-export type NudgeKind = "review" | "runway" | "post" | "failed";
+export type NudgeKind =
+  | "review"
+  | "runway"
+  | "post"
+  | "failed"
+  | "pipeline_done";
 export type RunwayTone = "refill" | "calm" | "amber" | "red";
 export type HomeNudgeDismissal = "persistent" | "session";
 
@@ -46,6 +51,7 @@ export type NudgeCreatorState = {
   schedule: NudgeSchedule;
   scheduledClips: readonly NudgeScheduledClip[];
   failedVideos?: readonly NudgeFailedVideo[];
+  doneVideos?: readonly NudgeDoneVideo[];
 };
 
 export type NudgeScheduledClip = {
@@ -59,6 +65,12 @@ export type NudgeFailedVideo = {
   id: string;
   pipelineStage?: string | null;
   pipelineError?: string | null;
+  pipelineRetryGeneration?: number | null;
+};
+
+export type NudgeDoneVideo = {
+  id: string;
+  pipelineStage?: string | null;
 };
 
 export type DueNudge =
@@ -102,6 +114,18 @@ export type DueNudge =
       notificationTitle: string;
       body: string;
       href: "/upload";
+      data: NudgeData & {
+        videoId: string;
+      };
+    }
+  | {
+      id: string;
+      kind: "pipeline_done";
+      dedupeKey: string;
+      title: string;
+      notificationTitle: string;
+      body: string;
+      href: string;
       data: NudgeData & {
         videoId: string;
       };
@@ -207,7 +231,13 @@ export function computeDueNudges(
   // Failed uploads are always-on. Review, runway, and post toggles control
   // optional reminders, but a broken pipeline is required state information.
   for (const video of failedVideosForNudges(creator.failedVideos ?? [])) {
-    nudges.push(failedNudge(video.id, video.pipelineError));
+    nudges.push(
+      failedNudge(
+        video.id,
+        video.pipelineError,
+        video.pipelineRetryGeneration ?? 0,
+      ),
+    );
   }
 
   if (schedule?.reviewReminders !== false && creator.reviewCount > 0) {
@@ -228,9 +258,17 @@ export function computeDueNudges(
   if (schedule?.postTimeNudges !== false) {
     for (const clip of dueScheduledClips(creator.scheduledClips, now)) {
       nudges.push(
-        postNudge(clip.id, formatHourMinute(clip.scheduledFor, creator.timezone)),
+        postNudge(
+          clip.id,
+          formatHourMinute(clip.scheduledFor, creator.timezone),
+          clip.scheduledFor,
+        ),
       );
     }
+  }
+
+  for (const video of doneVideosForNudges(creator.doneVideos ?? [])) {
+    nudges.push(pipelineDoneNudge(video.id));
   }
 
   return nudges;
@@ -247,7 +285,13 @@ export function selectHomeNudges(input: HomeNudgeInput): HomeNudge[] {
   const dateKey = "home";
 
   for (const video of failedVideosForNudges(input.failedVideos ?? [])) {
-    nudges.push(failedNudge(video.id, video.pipelineError));
+    nudges.push(
+      failedNudge(
+        video.id,
+        video.pipelineError,
+        video.pipelineRetryGeneration ?? 0,
+      ),
+    );
   }
 
   if (input.reviewReminders !== false && input.reviewCount > 0) {
@@ -263,7 +307,7 @@ export function selectHomeNudges(input: HomeNudgeInput): HomeNudge[] {
   }
 
   if (input.postTimeNudges !== false && input.dueClip?.isDue) {
-    nudges.push(postNudge(input.dueClip.clipId, input.dueClip.timeLabel));
+    nudges.push(postNudge(input.dueClip.clipId, input.dueClip.timeLabel, null));
   }
 
   return toHomeNudges(nudges);
@@ -328,16 +372,23 @@ function runwayNudge(
   };
 }
 
-function postNudge(clipId: string, timeLabel: string | null): DueNudge {
+function postNudge(
+  clipId: string,
+  timeLabel: string | null,
+  scheduledFor: Date | null,
+): DueNudge {
   const href = `/home?post=${encodeURIComponent(clipId)}`;
   const title = timeLabel
     ? `Clip scheduled for ${timeLabel} is ready. Post it now.`
     : "Clip is ready. Post it now.";
+  const dedupeKey = scheduledFor
+    ? `${clipId}:${scheduledFor.toISOString()}`
+    : clipId;
 
   return {
     id: `post:${clipId}`,
     kind: "post",
-    dedupeKey: clipId,
+    dedupeKey,
     title,
     notificationTitle: timeLabel
       ? `Your ${timeLabel} clip is ready to post`
@@ -347,7 +398,7 @@ function postNudge(clipId: string, timeLabel: string | null): DueNudge {
     data: {
       url: href,
       kind: "post",
-      dedupeKey: clipId,
+      dedupeKey,
       clipId,
     },
   };
@@ -356,14 +407,16 @@ function postNudge(clipId: string, timeLabel: string | null): DueNudge {
 function failedNudge(
   videoId: string,
   pipelineError: string | null | undefined,
+  retryGeneration: number,
 ): DueNudge {
   const title = failedUploadNudgeTitle(pipelineError);
   const notificationTitle = failedUploadTitle(pipelineError);
+  const dedupeKey = `${videoId}:${retryGeneration}`;
 
   return {
     id: `failed:${videoId}`,
     kind: "failed",
-    dedupeKey: videoId,
+    dedupeKey,
     title,
     notificationTitle,
     body: "Tap to retry.",
@@ -371,6 +424,26 @@ function failedNudge(
     data: {
       url: "/upload",
       kind: "failed",
+      dedupeKey,
+      videoId,
+    },
+  };
+}
+
+function pipelineDoneNudge(videoId: string): DueNudge {
+  const href = `/review/${encodeURIComponent(videoId)}`;
+
+  return {
+    id: `pipeline_done:${videoId}`,
+    kind: "pipeline_done",
+    dedupeKey: videoId,
+    title: "Clips are ready for review.",
+    notificationTitle: "Your clips are ready for review",
+    body: "Open Review and pick the strongest ones.",
+    href,
+    data: {
+      url: href,
+      kind: "pipeline_done",
       dedupeKey: videoId,
       videoId,
     },
@@ -436,6 +509,14 @@ function toHomeNudge(nudge: DueNudge): HomeNudge {
         href: nudge.href,
         dismissal: "session",
       };
+    case "pipeline_done":
+      return {
+        id: nudge.id,
+        kind: nudge.kind,
+        title: nudge.title,
+        href: nudge.href,
+        dismissal: "persistent",
+      };
   }
 }
 
@@ -455,6 +536,24 @@ function failedVideosForNudges(
   }
 
   return failedVideos;
+}
+
+function doneVideosForNudges(
+  videos: readonly NudgeDoneVideo[],
+): NudgeDoneVideo[] {
+  const seen = new Set<string>();
+  const doneVideos: NudgeDoneVideo[] = [];
+
+  for (const video of videos) {
+    if (video.pipelineStage !== "done" || seen.has(video.id)) {
+      continue;
+    }
+
+    seen.add(video.id);
+    doneVideos.push(video);
+  }
+
+  return doneVideos;
 }
 
 function plural(count: number, singular: string, pluralValue: string): string {
