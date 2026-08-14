@@ -20,5 +20,11 @@ export function ServiceWorkerRegistration() {
     navigator.serviceWorker.register("/sw.js").catch(() => {});
   }, []);
 
+  useEffect(() => {
+    // Roll the 30-day creator session cookie on real activity (once per app
+    // load), so active creators never hit the fixed-expiry logout.
+    fetch("/api/session/heartbeat", { method: "POST" }).catch(() => {});
+  }, []);
+
   return null;
 }

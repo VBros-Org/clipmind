@@ -423,6 +423,68 @@
   text-align: right;
 }
 
+.accessReveal {
+  display: grid;
+  gap: var(--cm-space-2);
+}
+
+.revealButton,
+.copyCodeButton {
+  min-height: var(--cm-action-height);
+  border-radius: var(--cm-radius-action);
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.revealButton {
+  width: 100%;
+  border: var(--cm-border-width) solid var(--cm-border-strong);
+  background: transparent;
+  color: var(--cm-text);
+}
+
+.revealButton:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.revealedAccessCode {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(5rem, auto);
+  gap: var(--cm-space-2);
+  align-items: stretch;
+}
+
+.revealedAccessCode span {
+  display: grid;
+  min-height: var(--cm-action-height);
+  align-items: center;
+  overflow-wrap: anywhere;
+  border: var(--cm-border-width) solid var(--cm-accent);
+  border-radius: var(--cm-radius-action);
+  background: var(--cm-bg-deep);
+  color: var(--cm-text);
+  font-weight: 900;
+  padding: var(--cm-space-3);
+}
+
+.copyCodeButton {
+  border: 0;
+  background: var(--cm-accent);
+  color: var(--cm-ink);
+}
+
+.revealError {
+  margin: 0;
+  border: var(--cm-border-width) solid var(--cm-red);
+  border-radius: var(--cm-radius-action);
+  background: color-mix(in srgb, var(--cm-red) 16%, var(--cm-surface));
+  color: var(--cm-red-soft);
+  font-size: var(--cm-font-secondary);
+  font-weight: 800;
+  padding: var(--cm-space-3);
+}
+
 .logoutButton {
   width: 100%;
   min-height: var(--cm-action-height);

@@ -2,11 +2,16 @@ import { randomInt } from "node:crypto";
 
 import type { Prisma, PrismaClient } from "@prisma/client";
 
+import {
+  channelPullErrorCode,
+  friendlyChannelPullError,
+  isChannelPullStage,
+  type ChannelPullStatusView,
+} from "./channel-pull-status";
 import { prisma } from "./db";
 import { normalizeInviteCode } from "./invite-codes";
 import {
-  CREATOR_ACCESS_COOKIE,
-  CREATOR_ACCESS_COOKIE_MAX_AGE_SECONDS,
+  creatorAccessSetCookieHeader,
   normalizeAccessCode,
   readCookieValue,
 } from "./review-auth";
@@ -25,6 +30,7 @@ export type SignupApiOptions = {
   prismaClient?: PrismaClient;
   now?: Date;
   generateAccessCode?: () => string;
+  beforeAccessCodeUpdate?: (accessCode: string) => Promise<void> | void;
 };
 
 export type ClaimedInvite = {
@@ -38,6 +44,19 @@ export type SignupProfileInput = {
   channelUrl: string | null;
   captionPreset: CaptionPresetId;
   timezone: string | null;
+};
+
+export type SignupSessionState = {
+  step: "invite" | "profile" | "access";
+  creatorId: string | null;
+  accessCode?: string;
+  profile?: {
+    displayName: string;
+    channelUrl: string;
+    captionPreset: CaptionPresetId;
+    captionCorpus: string;
+    channelPullStatus: ChannelPullStatusView;
+  };
 };
 
 class SignupApiError extends Error {
@@ -86,6 +105,33 @@ export async function handleClaimInvite(
   }
 }
 
+export async function handleGetSignupSession(
+  request: Request,
+  options: SignupApiOptions = {},
+): Promise<Response> {
+  const creatorId = readCookieValue(
+    request.headers.get("cookie"),
+    SIGNUP_CREATOR_COOKIE,
+  );
+  if (!creatorId) {
+    return json(
+      { step: "invite", creatorId: null } satisfies SignupSessionState,
+      200,
+    );
+  }
+
+  const state = await loadSignupSessionState(creatorId, options);
+  const response = json(state, 200);
+  response.headers.append(
+    "Set-Cookie",
+    cookieHeader(SIGNUP_CREATOR_COOKIE, state.creatorId ?? "", {
+      maxAge: state.creatorId ? SIGNUP_CREATOR_COOKIE_MAX_AGE_SECONDS : 0,
+      httpOnly: true,
+    }),
+  );
+  return response;
+}
+
 export async function handleCreateSignupAccount(
   request: Request,
   options: SignupApiOptions = {},
@@ -110,6 +156,7 @@ export async function handleCreateSignupAccount(
     const db = options.prismaClient ?? prisma;
     const accessCode = await completeSignupProfile(db, creatorId, profile, {
       generateAccessCode: options.generateAccessCode ?? generateCreatorAccessCode,
+      beforeAccessCodeUpdate: options.beforeAccessCodeUpdate,
     });
 
     const response = json(
@@ -121,15 +168,12 @@ export async function handleCreateSignupAccount(
     );
     response.headers.append(
       "Set-Cookie",
-      cookieHeader(CREATOR_ACCESS_COOKIE, accessCode, {
-        maxAge: CREATOR_ACCESS_COOKIE_MAX_AGE_SECONDS,
-        httpOnly: true,
-      }),
+      creatorAccessSetCookieHeader(accessCode),
     );
     response.headers.append(
       "Set-Cookie",
-      cookieHeader(SIGNUP_CREATOR_COOKIE, "", {
-        maxAge: 0,
+      cookieHeader(SIGNUP_CREATOR_COOKIE, creatorId, {
+        maxAge: SIGNUP_CREATOR_COOKIE_MAX_AGE_SECONDS,
         httpOnly: true,
       }),
     );
@@ -141,6 +185,66 @@ export async function handleCreateSignupAccount(
 
     throw error;
   }
+}
+
+export async function loadSignupSessionState(
+  creatorId: string,
+  options: SignupApiOptions = {},
+): Promise<SignupSessionState> {
+  const db = options.prismaClient ?? prisma;
+  const creator = await db.creator.findUnique({
+    where: {
+      id: creatorId,
+    },
+    select: {
+      id: true,
+      accessCode: true,
+      displayName: true,
+      channelUrl: true,
+      captionStyle: true,
+      captionCorpus: true,
+      channelPullStage: true,
+      channelPullError: true,
+      inviteCode: {
+        select: {
+          id: true,
+        },
+      },
+    },
+  });
+
+  if (!creator?.inviteCode) {
+    return {
+      step: "invite",
+      creatorId: null,
+    };
+  }
+
+  const profile = {
+    displayName: creator.displayName ?? "",
+    channelUrl: creator.channelUrl ?? "",
+    captionPreset: captionPresetFromStyle(creator.captionStyle),
+    captionCorpus: creator.captionCorpus ?? "",
+    channelPullStatus: channelPullStatusFromCreator(
+      creator.channelPullStage,
+      creator.channelPullError,
+    ),
+  };
+
+  if (creator.accessCode) {
+    return {
+      step: "access",
+      creatorId: creator.id,
+      accessCode: creator.accessCode,
+      profile,
+    };
+  }
+
+  return {
+    step: "profile",
+    creatorId: creator.id,
+    profile,
+  };
 }
 
 export async function claimInviteCode(
@@ -240,6 +344,7 @@ async function completeSignupProfile(
   profile: SignupProfileInput,
   options: {
     generateAccessCode: () => string;
+    beforeAccessCodeUpdate?: (accessCode: string) => Promise<void> | void;
   },
 ): Promise<string> {
   const creator = await db.creator.findUnique({
@@ -266,10 +371,12 @@ async function completeSignupProfile(
 
   for (let attempt = 0; attempt < 6; attempt += 1) {
     const accessCode = normalizeAccessCode(options.generateAccessCode());
+    await options.beforeAccessCodeUpdate?.(accessCode);
     try {
-      await db.creator.update({
+      const updated = await db.creator.updateMany({
         where: {
           id: creator.id,
+          accessCode: null,
         },
         data: {
           displayName: profile.displayName,
@@ -283,8 +390,14 @@ async function completeSignupProfile(
           mindError: null,
         },
       });
+      if (updated.count !== 1) {
+        throw new SignupApiError(409, "This invite already created an account.");
+      }
       return accessCode;
     } catch (error) {
+      if (error instanceof SignupApiError) {
+        throw error;
+      }
       if (isUniqueConstraintError(error) && attempt < 5) {
         continue;
       }
@@ -347,6 +460,30 @@ function readOptionalStringField(payload: unknown, key: string): string | null {
 
 function isCaptionPreset(value: string): value is CaptionPresetId {
   return CAPTION_PRESETS.includes(value as CaptionPresetId);
+}
+
+function captionPresetFromStyle(style: Prisma.JsonValue): CaptionPresetId {
+  if (
+    isRecord(style) &&
+    typeof style.preset === "string" &&
+    isCaptionPreset(style.preset)
+  ) {
+    return style.preset;
+  }
+
+  return "clean-bold";
+}
+
+function channelPullStatusFromCreator(
+  rawStage: string | null,
+  rawError: string | null,
+): ChannelPullStatusView {
+  const stage = isChannelPullStage(rawStage) ? rawStage : null;
+  return {
+    stage,
+    error: stage === "failed" ? friendlyChannelPullError(rawError) : null,
+    errorCode: channelPullErrorCode(rawError),
+  };
 }
 
 function cleanString(value: string): string {

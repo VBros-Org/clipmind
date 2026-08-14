@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 
 import { CREATOR_ACCESS_COOKIE } from "../../../lib/review-auth";
+import { SIGNUP_CREATOR_COOKIE } from "../../../lib/signup";
 import { loadSignedInSignupAffordance } from "../../../lib/signup-page";
 
 import { SignupFlow } from "./SignupFlow";
@@ -9,8 +10,9 @@ import styles from "./signup.module.css";
 export default async function SignupPage() {
   const cookieStore = await cookies();
   const accessCookie = cookieStore.get(CREATOR_ACCESS_COOKIE)?.value;
+  const signupCookie = cookieStore.get(SIGNUP_CREATOR_COOKIE)?.value;
   const signedIn = await loadSignedInSignupAffordance(
-    accessCookie
+    accessCookie && !signupCookie
       ? `${CREATOR_ACCESS_COOKIE}=${encodeURIComponent(accessCookie)}`
       : null,
   );
@@ -33,7 +35,7 @@ export default async function SignupPage() {
           </div>
         </section>
       ) : (
-        <SignupFlow />
+        <SignupFlow resumeOnLoad={Boolean(signupCookie)} />
       )}
     </main>
   );

@@ -7,16 +7,23 @@ import {
   loadCreatorSessionForAccessCode,
 } from "../lib/review-auth";
 import {
+  handleRevealCreatorAccessCode,
+  handleSessionHeartbeat,
+} from "../lib/session";
+import {
   SIGNUP_CREATOR_COOKIE,
   claimInviteCode,
   handleClaimInvite,
   handleCreateSignupAccount,
+  handleGetSignupSession,
 } from "../lib/signup";
 
 type SignupFixture = {
   code: string;
   creatorIds: string[];
 };
+
+assertSafeTestDatabase();
 
 test("invite claim is atomic and rejects double use", async () => {
   const fixture = await createInviteFixture();
@@ -150,7 +157,7 @@ test("signup completion returns access code once and sets creator session cookie
       firstCookieValue(response, CREATOR_ACCESS_COOKIE),
       body.accessCode,
     );
-    assert.equal(firstCookieValue(response, SIGNUP_CREATOR_COOKIE), "");
+    assert.equal(firstCookieValue(response, SIGNUP_CREATOR_COOKIE), creatorId);
 
     const session = await loadCreatorSessionForAccessCode(body.accessCode, {
       prismaClient: prisma,
@@ -179,6 +186,201 @@ test("signup completion returns access code once and sets creator session cookie
     });
     assert.equal(creator.timezone, "Asia/Bangkok");
     assert.equal(creator.mindStage, "pending");
+  } finally {
+    await cleanupSignupFixture(fixture);
+  }
+});
+
+test("signup access code creation is compare-and-set under double submit", async () => {
+  const fixture = await createInviteFixture();
+
+  try {
+    const claim = await handleClaimInvite(
+      jsonRequest("http://localhost/api/signup/claim-invite", {
+        code: fixture.code,
+      }),
+      { prismaClient: prisma },
+    );
+    assert.equal(claim.status, 200);
+    const creatorId = firstCookieValue(claim, SIGNUP_CREATOR_COOKIE);
+    assert.ok(creatorId);
+    fixture.creatorIds.push(creatorId);
+
+    const barrier = createBarrier(2);
+    const generatedCodes = ["cm-race-code-a", "cm-race-code-b"];
+    const payload = {
+      displayName: "Race Creator",
+      channelUrl: "https://example.com/race",
+      captionPreset: "clean-bold",
+      timezone: "Asia/Bangkok",
+    };
+    const submit = () =>
+      handleCreateSignupAccount(
+        jsonRequest("http://localhost/api/signup/create-account", payload, {
+          cookie: `${SIGNUP_CREATOR_COOKIE}=${encodeURIComponent(creatorId)}`,
+        }),
+        {
+          prismaClient: prisma,
+          generateAccessCode: () => generatedCodes.shift() ?? "cm-race-fallback",
+          beforeAccessCodeUpdate: barrier,
+        },
+      );
+
+    const responses = await Promise.all([submit(), submit()]);
+    assert.deepEqual(
+      responses.map((response) => response.status).sort(),
+      [200, 409],
+    );
+
+    const success = responses.find((response) => response.status === 200);
+    assert.ok(success);
+    const body = (await success.json()) as {
+      accessCode: string;
+    };
+
+    const creator = await prisma.creator.findUniqueOrThrow({
+      where: {
+        id: creatorId,
+      },
+      select: {
+        accessCode: true,
+      },
+    });
+    assert.equal(creator.accessCode, body.accessCode);
+  } finally {
+    await cleanupSignupFixture(fixture);
+  }
+});
+
+test("signup session resumes burned invite and later reveals code with rolled cookie", async () => {
+  const fixture = await createInviteFixture();
+
+  try {
+    const claim = await handleClaimInvite(
+      jsonRequest("http://localhost/api/signup/claim-invite", {
+        code: fixture.code,
+      }),
+      { prismaClient: prisma },
+    );
+    assert.equal(claim.status, 200);
+    const creatorId = firstCookieValue(claim, SIGNUP_CREATOR_COOKIE);
+    assert.ok(creatorId);
+    fixture.creatorIds.push(creatorId);
+
+    const resumeAfterClaim = await handleGetSignupSession(
+      requestWithCookie(
+        "http://localhost/api/signup/session",
+        SIGNUP_CREATOR_COOKIE,
+        creatorId,
+      ),
+      { prismaClient: prisma },
+    );
+    assert.equal(resumeAfterClaim.status, 200);
+    assert.deepEqual(await resumeAfterClaim.json(), {
+      step: "profile",
+      creatorId,
+      profile: {
+        displayName: "",
+        channelUrl: "",
+        captionPreset: "clean-bold",
+        captionCorpus: "",
+        channelPullStatus: {
+          stage: null,
+          error: null,
+          errorCode: null,
+        },
+      },
+    });
+
+    const complete = await handleCreateSignupAccount(
+      jsonRequest(
+        "http://localhost/api/signup/create-account",
+        {
+          displayName: "Resume Creator",
+          channelUrl: "https://example.com/resume",
+          captionPreset: "outline-pop",
+          timezone: "Asia/Bangkok",
+        },
+        {
+          cookie: `${SIGNUP_CREATOR_COOKIE}=${encodeURIComponent(creatorId)}`,
+        },
+      ),
+      {
+        prismaClient: prisma,
+        generateAccessCode: () => "cm-resume-code-1234",
+      },
+    );
+    assert.equal(complete.status, 200);
+    const completeBody = (await complete.json()) as {
+      accessCode: string;
+      creatorId: string;
+    };
+    assert.equal(completeBody.creatorId, creatorId);
+    assert.equal(completeBody.accessCode, "cm-resume-code-1234");
+    assert.equal(firstCookieValue(complete, SIGNUP_CREATOR_COOKIE), creatorId);
+
+    const resumeAfterComplete = await handleGetSignupSession(
+      requestWithCookie(
+        "http://localhost/api/signup/session",
+        SIGNUP_CREATOR_COOKIE,
+        creatorId,
+      ),
+      { prismaClient: prisma },
+    );
+    assert.equal(resumeAfterComplete.status, 200);
+    assert.deepEqual(await resumeAfterComplete.json(), {
+      step: "access",
+      creatorId,
+      accessCode: completeBody.accessCode,
+      profile: {
+        displayName: "Resume Creator",
+        channelUrl: "https://example.com/resume",
+        captionPreset: "outline-pop",
+        captionCorpus: "",
+        channelPullStatus: {
+          stage: null,
+          error: null,
+          errorCode: null,
+        },
+      },
+    });
+
+    const reveal = await handleRevealCreatorAccessCode(
+      requestWithCookie(
+        "http://localhost/api/session/access-code",
+        CREATOR_ACCESS_COOKIE,
+        completeBody.accessCode,
+      ),
+      { prismaClient: prisma },
+    );
+    assert.equal(reveal.status, 200);
+    assert.deepEqual(await reveal.json(), {
+      accessCode: completeBody.accessCode,
+    });
+    const refreshedCookie = reveal.headers.get("set-cookie") ?? "";
+    assert.match(refreshedCookie, new RegExp(`${CREATOR_ACCESS_COOKIE}=`));
+    assert.match(refreshedCookie, /Max-Age=2592000/);
+
+    const heartbeat = await handleSessionHeartbeat(
+      requestWithCookie(
+        "http://localhost/api/session/heartbeat",
+        CREATOR_ACCESS_COOKIE,
+        completeBody.accessCode,
+      ),
+      { prismaClient: prisma },
+    );
+    assert.equal(heartbeat.status, 204);
+    const heartbeatCookie = heartbeat.headers.get("set-cookie") ?? "";
+    assert.match(heartbeatCookie, new RegExp(`${CREATOR_ACCESS_COOKIE}=`));
+    assert.match(heartbeatCookie, /Max-Age=2592000/);
+
+    const heartbeatUnauthed = await handleSessionHeartbeat(
+      new Request("http://localhost/api/session/heartbeat", {
+        method: "POST",
+      }),
+      { prismaClient: prisma },
+    );
+    assert.equal(heartbeatUnauthed.status, 401);
   } finally {
     await cleanupSignupFixture(fixture);
   }
@@ -247,8 +449,57 @@ function jsonRequest(
   });
 }
 
+function requestWithCookie(url: string, name: string, value: string): Request {
+  return new Request(url, {
+    headers: {
+      cookie: `${name}=${encodeURIComponent(value)}`,
+    },
+  });
+}
+
 function firstCookieValue(response: Response, name: string): string {
   const setCookie = response.headers.get("set-cookie") ?? "";
   const match = setCookie.match(new RegExp(`${name}=([^;]*)`));
   return match ? decodeURIComponent(match[1] ?? "") : "";
+}
+
+function createBarrier(parties: number): () => Promise<void> {
+  let arrived = 0;
+  let release: () => void = () => undefined;
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  return async () => {
+    arrived += 1;
+    if (arrived === parties) {
+      release();
+    }
+    await promise;
+  };
+}
+
+function assertSafeTestDatabase(): void {
+  const rawUrl = process.env.DATABASE_URL;
+  if (!rawUrl) {
+    throw new Error("DATABASE_URL is required for signup DB tests.");
+  }
+
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error("DATABASE_URL must be a valid Postgres URL.");
+  }
+
+  const localHosts = new Set(["localhost", "127.0.0.1", "::1"]);
+  if (
+    url.protocol !== "postgresql:" ||
+    !localHosts.has(url.hostname) ||
+    url.pathname !== "/clipmind_dev"
+  ) {
+    throw new Error(
+      "Refusing to run signup DB tests outside localhost/clipmind_dev.",
+    );
+  }
 }

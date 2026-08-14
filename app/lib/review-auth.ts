@@ -79,3 +79,46 @@ export function readCookieValue(
 export function cookieHeaderForAccessCode(accessCode: string): string {
   return `${CREATOR_ACCESS_COOKIE}=${encodeURIComponent(accessCode)}`;
 }
+
+export function creatorAccessSetCookieHeader(accessCode: string): string {
+  return cookieHeader(CREATOR_ACCESS_COOKIE, accessCode, {
+    maxAge: CREATOR_ACCESS_COOKIE_MAX_AGE_SECONDS,
+    httpOnly: true,
+  });
+}
+
+export function appendCreatorSessionCookie(
+  response: Response,
+  session: CreatorSession,
+): Response {
+  response.headers.append(
+    "Set-Cookie",
+    creatorAccessSetCookieHeader(session.accessCode),
+  );
+  return response;
+}
+
+function cookieHeader(
+  name: string,
+  value: string,
+  options: {
+    maxAge: number;
+    httpOnly: boolean;
+  },
+): string {
+  const parts = [
+    `${name}=${encodeURIComponent(value)}`,
+    "Path=/",
+    "SameSite=Lax",
+    `Max-Age=${options.maxAge}`,
+  ];
+
+  if (options.httpOnly) {
+    parts.push("HttpOnly");
+  }
+  if (process.env.NODE_ENV === "production") {
+    parts.push("Secure");
+  }
+
+  return parts.join("; ");
+}

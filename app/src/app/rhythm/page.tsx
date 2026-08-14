@@ -4,6 +4,7 @@ import { DEFAULT_SCHEDULE_SETTINGS } from "../../../lib/schedule-settings";
 import { AppShell } from "../AppShell";
 import { requireCreatorSession } from "../app-session";
 
+import { AccessCodeReveal } from "./AccessCodeReveal";
 import { RhythmControls } from "./RhythmControls";
 import { VoiceCard } from "./VoiceCard";
 import styles from "./rhythm.module.css";
@@ -88,6 +89,7 @@ export default async function RhythmPage({ searchParams }: RhythmPageProps) {
             <span>Channel URL</span>
             <span>{overview.creator.channelUrl ?? "No channel saved."}</span>
           </div>
+          <AccessCodeReveal />
           <form action="/api/session/logout" method="post">
             <button className={styles.logoutButton} type="submit">
               Log out
