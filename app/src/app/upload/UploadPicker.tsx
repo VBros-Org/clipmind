@@ -173,6 +173,7 @@ export function UploadPicker({
 
   useEffect(() => {
     return () => {
+      notifyServiceWorkerUploadState(false);
       void wakeLockRef.current?.stop();
     };
   }, []);
@@ -263,6 +264,7 @@ export function UploadPicker({
     const abortController = new AbortController();
     uploadAbortRef.current = abortController;
     activeUploadIntentRef.current = null;
+    notifyServiceWorkerUploadState(true);
 
     try {
       const response = await uploadFile(file, (nextProgress) => {
@@ -306,6 +308,7 @@ export function UploadPicker({
         uploadAbortRef.current = null;
       }
       activeUploadIntentRef.current = null;
+      notifyServiceWorkerUploadState(false);
       setProgress(null);
       void wakeLockRef.current?.stop();
       if (inputRef.current) {
@@ -632,6 +635,17 @@ function uploadFile(
   options: Parameters<typeof uploadFileMultipart>[2],
 ) {
   return uploadFileMultipart(file, onProgress, options);
+}
+
+function notifyServiceWorkerUploadState(uploadInProgress: boolean): void {
+  if (!("serviceWorker" in navigator)) {
+    return;
+  }
+
+  navigator.serviceWorker.controller?.postMessage({
+    type: "clipmind-upload-state",
+    uploadInProgress,
+  });
 }
 
 function mergeStatus(

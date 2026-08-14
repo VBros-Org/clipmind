@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 
+import { prisma } from "./db";
 import {
   appendCreatorSessionCookie,
   CREATOR_ACCESS_COOKIE,
@@ -9,9 +10,15 @@ import { SIGNUP_CREATOR_COOKIE } from "./signup";
 
 type SessionApiOptions = {
   prismaClient?: PrismaClient;
+  now?: Date;
 };
 
-export function handleLogoutCreatorSession(): Response {
+export async function handleLogoutCreatorSession(
+  request?: Request,
+  options: SessionApiOptions = {},
+): Promise<Response> {
+  await disableLogoutPushSubscription(request, options);
+
   const response = new Response(null, {
     status: 303,
     headers: {
@@ -111,4 +118,57 @@ function json(payload: unknown, status: number): Response {
       "Cache-Control": "no-store",
     },
   });
+}
+
+async function disableLogoutPushSubscription(
+  request: Request | undefined,
+  options: SessionApiOptions,
+): Promise<void> {
+  if (!request) {
+    return;
+  }
+
+  const pushToken = await readLogoutPushToken(request);
+  if (!pushToken) {
+    return;
+  }
+
+  const session = await loadCreatorSessionFromCookieHeader(
+    request.headers.get("cookie"),
+    options,
+  );
+  if (!session) {
+    return;
+  }
+
+  const db = options.prismaClient ?? prisma;
+  await db.pushSubscription.updateMany({
+    where: {
+      creatorId: session.creatorId,
+      token: pushToken,
+      disabledAt: null,
+    },
+    data: {
+      disabledAt: options.now ?? new Date(),
+    },
+  });
+}
+
+async function readLogoutPushToken(request: Request): Promise<string | null> {
+  const contentType = request.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().includes("application/json")) {
+    return null;
+  }
+
+  const payload = (await request.json().catch(() => null)) as unknown;
+  if (!isRecord(payload) || typeof payload.pushToken !== "string") {
+    return null;
+  }
+
+  const token = payload.pushToken.trim();
+  return token.length >= 10 && token.length <= 4096 ? token : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
