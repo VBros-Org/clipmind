@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from src import main
 from src.candidates import CandidateWindow
 from src.config import reset_settings_cache
-from src.transcribe import Transcript, TranscriptSegment
+from src.transcribe import Transcript, TranscriptSegment, TranscriptWord
 
 
 def test_candidates_rejects_missing_or_wrong_token() -> None:
@@ -39,7 +39,10 @@ def test_candidates_accepts_valid_token_with_mocked_transcription(monkeypatch) -
                 text="Wait, this is the moment.",
             )
         ],
-        words=[],
+        words=[
+            TranscriptWord(start_ms=0, end_ms=400, word="Wait"),
+            TranscriptWord(start_ms=400, end_ms=700, word="this"),
+        ],
     )
 
     monkeypatch.setattr(main, "probe_video_duration_ms", lambda video_path: 20_000)
@@ -56,6 +59,8 @@ def test_candidates_accepts_valid_token_with_mocked_transcription(monkeypatch) -
                 start_ms=0,
                 end_ms=12_000,
                 transcript="Wait, this is the moment.",
+                segments=transcript.segments,
+                words=transcript.words,
                 reasons=["transcript hook: emphasis"],
             )
         ],
@@ -76,6 +81,17 @@ def test_candidates_accepts_valid_token_with_mocked_transcription(monkeypatch) -
                 "start_ms": 0,
                 "end_ms": 12_000,
                 "transcript": "Wait, this is the moment.",
+                "segments": [
+                    {
+                        "start_ms": 0,
+                        "end_ms": 12_000,
+                        "text": "Wait, this is the moment.",
+                    }
+                ],
+                "words": [
+                    {"start_ms": 0, "end_ms": 400, "word": "Wait"},
+                    {"start_ms": 400, "end_ms": 700, "word": "this"},
+                ],
                 "reasons": ["transcript hook: emphasis"],
             }
         ],

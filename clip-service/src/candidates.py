@@ -8,7 +8,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .transcribe import Transcript, TranscriptSegment
+from .transcribe import Transcript, TranscriptSegment, TranscriptWord
 
 MIN_CLIP_MS = 10_000
 TARGET_MIN_CLIP_MS = 20_000
@@ -93,15 +93,36 @@ class CandidateWindow:
     start_ms: int
     end_ms: int
     transcript: str = ""
+    segments: list[TranscriptSegment] = field(default_factory=list)
+    words: list[TranscriptWord] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
     anchor_kind: str = "hook"
     anchor_ms: int = 0
+    spike_delta_lufs: float = 0.0
+    hook_density: float = 0.0
+    score: float = 0.0
 
     def to_response(self) -> dict[str, object]:
         return {
             "start_ms": self.start_ms,
             "end_ms": self.end_ms,
             "transcript": self.transcript,
+            "segments": [
+                {
+                    "start_ms": segment.start_ms,
+                    "end_ms": segment.end_ms,
+                    "text": segment.text,
+                }
+                for segment in self.segments
+            ],
+            "words": [
+                {
+                    "start_ms": word.start_ms,
+                    "end_ms": word.end_ms,
+                    "word": word.word,
+                }
+                for word in self.words
+            ],
             "reasons": self.reasons,
         }
 
@@ -112,12 +133,20 @@ class CandidateAnchor:
     segment_index: int
     anchor_ms: int
     reasons: list[str]
+    spike_delta_lufs: float = 0.0
 
 
 @dataclass(frozen=True)
 class LoudnessSample:
     time_ms: int
     momentary_lufs: float
+
+
+@dataclass(frozen=True)
+class EnergySpike:
+    samples: list[LoudnessSample]
+    strongest_sample: LoudnessSample
+    delta_lufs: float
 
 
 def build_candidates(
@@ -135,18 +164,24 @@ def build_candidates(
     raw_windows = [
         anchor_window(anchor, transcript, duration_ms)
         for anchor in anchors
-        if transcript.segments
+    ]
+    enriched_windows = [
+        _with_transcript_data(window, transcript)
+        for window in raw_windows
+        if window.end_ms > window.start_ms
     ]
 
-    deduped = dedupe_overlapping_windows(raw_windows, duration_ms)
-    for window in deduped:
-        window.transcript = transcript_for_window(transcript, window.start_ms, window.end_ms)
+    deduped = dedupe_overlapping_windows(enriched_windows, duration_ms)
 
-    candidates = [window for window in deduped if window.transcript]
+    candidates = [
+        window
+        for window in deduped
+        if window.transcript or window.anchor_kind == "energy"
+    ]
     if not candidates and transcript.segments:
         candidates = [_opening_transcript_candidate(transcript, duration_ms)]
 
-    return candidates[:MAX_CANDIDATES]
+    return select_top_spread_windows(candidates, duration_ms)
 
 
 def transcript_hook_anchors(transcript: Transcript) -> list[CandidateAnchor]:
@@ -215,15 +250,12 @@ def audio_energy_anchors(
     video_path: Path,
     transcript: Transcript,
 ) -> list[CandidateAnchor]:
-    if not transcript.segments:
-        return []
-
     samples = loudness_samples(video_path)
-    spikes = energy_spike_groups(samples)
+    spikes = energy_spikes(samples)
     anchors: list[CandidateAnchor] = []
 
-    for group in spikes:
-        strongest_sample = max(group, key=lambda sample: sample.momentary_lufs)
+    for spike in spikes:
+        strongest_sample = spike.strongest_sample
         anchors.append(
             CandidateAnchor(
                 kind="energy",
@@ -233,6 +265,7 @@ def audio_energy_anchors(
                 ),
                 anchor_ms=strongest_sample.time_ms,
                 reasons=["audio energy: spike above rolling baseline"],
+                spike_delta_lufs=spike.delta_lufs,
             )
         )
 
@@ -286,7 +319,11 @@ def loudness_samples(video_path: Path) -> list[LoudnessSample]:
 
 
 def energy_spike_groups(samples: list[LoudnessSample]) -> list[list[LoudnessSample]]:
-    flagged: list[LoudnessSample] = []
+    return [spike.samples for spike in energy_spikes(samples)]
+
+
+def energy_spikes(samples: list[LoudnessSample]) -> list[EnergySpike]:
+    flagged: list[tuple[LoudnessSample, float]] = []
     for index, sample in enumerate(samples):
         if sample.momentary_lufs <= -100:
             continue
@@ -301,17 +338,32 @@ def energy_spike_groups(samples: list[LoudnessSample]) -> list[list[LoudnessSamp
             continue
 
         baseline = statistics.median(prior)
-        if sample.momentary_lufs - baseline >= 6.0 and sample.momentary_lufs > -38:
-            flagged.append(sample)
+        delta_lufs = sample.momentary_lufs - baseline
+        if delta_lufs >= 6.0 and sample.momentary_lufs > -38:
+            flagged.append((sample, delta_lufs))
 
-    groups: list[list[LoudnessSample]] = []
-    for sample in flagged:
-        if groups and sample.time_ms - groups[-1][-1].time_ms <= 700:
-            groups[-1].append(sample)
+    groups: list[list[tuple[LoudnessSample, float]]] = []
+    for sample, delta_lufs in flagged:
+        if groups and sample.time_ms - groups[-1][-1][0].time_ms <= 700:
+            groups[-1].append((sample, delta_lufs))
         else:
-            groups.append([sample])
+            groups.append([(sample, delta_lufs)])
 
-    return groups
+    spikes: list[EnergySpike] = []
+    for group in groups:
+        strongest_sample, _ = max(
+            group,
+            key=lambda item: item[0].momentary_lufs,
+        )
+        spikes.append(
+            EnergySpike(
+                samples=[sample for sample, _delta in group],
+                strongest_sample=strongest_sample,
+                delta_lufs=max(delta_lufs for _sample, delta_lufs in group),
+            )
+        )
+
+    return spikes
 
 
 def anchor_window(
@@ -319,6 +371,9 @@ def anchor_window(
     transcript: Transcript,
     duration_ms: int,
 ) -> CandidateWindow:
+    if anchor.kind == "energy":
+        return _energy_anchor_window(anchor, duration_ms)
+
     if not transcript.segments:
         return CandidateWindow(0, 0, reasons=anchor.reasons)
 
@@ -352,6 +407,24 @@ def anchor_window(
             reasons=anchor.reasons,
             anchor_kind=anchor.kind,
             anchor_ms=anchor.anchor_ms,
+            spike_delta_lufs=anchor.spike_delta_lufs,
+        ),
+        duration_ms,
+    )
+
+
+def _energy_anchor_window(
+    anchor: CandidateAnchor,
+    duration_ms: int,
+) -> CandidateWindow:
+    return _clamp_window(
+        CandidateWindow(
+            start_ms=anchor.anchor_ms,
+            end_ms=min(duration_ms, anchor.anchor_ms + TARGET_MIN_CLIP_MS),
+            reasons=anchor.reasons,
+            anchor_kind=anchor.kind,
+            anchor_ms=anchor.anchor_ms,
+            spike_delta_lufs=anchor.spike_delta_lufs,
         ),
         duration_ms,
     )
@@ -367,7 +440,7 @@ def dedupe_overlapping_windows(
         for window in windows
         if window.end_ms > window.start_ms
     ]
-    prepared.sort(key=_anchor_strength_key)
+    prepared.sort(key=_dedupe_strength_key)
 
     selected: list[CandidateWindow] = []
     for window in prepared:
@@ -379,8 +452,7 @@ def dedupe_overlapping_windows(
 
         selected.append(window)
 
-    selected.sort(key=lambda window: (window.start_ms, window.end_ms, window.anchor_ms))
-    return selected
+    return _timeline_order(selected)
 
 
 def merge_overlapping_windows(
@@ -393,11 +465,119 @@ def merge_overlapping_windows(
 
 
 def transcript_for_window(transcript: Transcript, start_ms: int, end_ms: int) -> str:
-    parts = [
-        segment.text.strip()
+    segments = transcript_segments_for_window(transcript, start_ms, end_ms)
+    words = transcript_words_for_window(transcript, start_ms, end_ms)
+    return _transcript_text_for_window(transcript, segments, words, start_ms)
+
+
+def transcript_segments_for_window(
+    transcript: Transcript,
+    start_ms: int,
+    end_ms: int,
+) -> list[TranscriptSegment]:
+    return [
+        segment
         for segment in transcript.segments
         if segment.text.strip() and _overlaps(segment, start_ms, end_ms)
     ]
+
+
+def transcript_words_for_window(
+    transcript: Transcript,
+    start_ms: int,
+    end_ms: int,
+) -> list[TranscriptWord]:
+    return [
+        word
+        for word in transcript.words
+        if word.word.strip() and _overlaps(word, start_ms, end_ms)
+    ]
+
+
+def select_top_spread_windows(
+    windows: list[CandidateWindow],
+    duration_ms: int,
+    limit: int = MAX_CANDIDATES,
+) -> list[CandidateWindow]:
+    """Keep the best windows while reserving space across the source timeline.
+
+    The score is intentionally simple and local to the service: hook density
+    rewards windows packed with transcript hooks, while spike delta rewards
+    sharp audio jumps. We first take the highest-scored window per timeline
+    bucket, then fill any remaining slots by score. That prevents the old
+    earliest-eight behavior without handing selection control to the Mind.
+    """
+    if limit <= 0:
+        return []
+    if len(windows) <= limit:
+        return _timeline_order(windows)
+
+    scored = sorted(windows, key=_selection_score_key)
+    selected: list[CandidateWindow] = []
+    selected_ids: set[int] = set()
+    occupied_buckets: set[int] = set()
+    bucket_count = max(1, limit)
+
+    for window in scored:
+        bucket = _timeline_bucket(window, duration_ms, bucket_count)
+        if bucket in occupied_buckets:
+            continue
+        selected.append(window)
+        selected_ids.add(id(window))
+        occupied_buckets.add(bucket)
+        if len(selected) == limit:
+            return _timeline_order(selected)
+
+    for window in scored:
+        if id(window) in selected_ids:
+            continue
+        selected.append(window)
+        if len(selected) == limit:
+            break
+
+    return _timeline_order(selected)
+
+
+def _with_transcript_data(
+    window: CandidateWindow,
+    transcript: Transcript,
+) -> CandidateWindow:
+    segments = transcript_segments_for_window(transcript, window.start_ms, window.end_ms)
+    words = transcript_words_for_window(transcript, window.start_ms, window.end_ms)
+    hook_density = _hook_density(segments, window.start_ms, window.end_ms)
+    return CandidateWindow(
+        start_ms=window.start_ms,
+        end_ms=window.end_ms,
+        transcript=_transcript_text_for_window(
+            transcript,
+            segments,
+            words,
+            window.start_ms,
+        ),
+        segments=segments,
+        words=words,
+        reasons=window.reasons,
+        anchor_kind=window.anchor_kind,
+        anchor_ms=window.anchor_ms,
+        spike_delta_lufs=window.spike_delta_lufs,
+        hook_density=hook_density,
+        score=_score_window(
+            window.anchor_kind,
+            window.spike_delta_lufs,
+            hook_density,
+        ),
+    )
+
+
+def _transcript_text_for_window(
+    transcript: Transcript,
+    segments: list[TranscriptSegment],
+    words: list[TranscriptWord],
+    start_ms: int,
+) -> str:
+    parts = [segment.text.strip() for segment in segments if segment.text.strip()]
+    if not parts and words:
+        parts = [word.word.strip() for word in words if word.word.strip()]
     if not parts and start_ms == 0 and transcript.text.strip():
         parts = [transcript.text.strip()]
     return _squash_whitespace(" ".join(parts))
@@ -417,8 +597,7 @@ def _opening_transcript_candidate(
         transcript,
         duration_ms,
     )
-    window.transcript = transcript_for_window(transcript, window.start_ms, window.end_ms)
-    return window
+    return _with_transcript_data(window, transcript)
 
 
 def _whole_source_candidate(
@@ -432,8 +611,7 @@ def _whole_source_candidate(
         anchor_kind="source",
         anchor_ms=0,
     )
-    window.transcript = transcript_for_window(transcript, window.start_ms, window.end_ms)
-    return window
+    return _with_transcript_data(window, transcript)
 
 
 def _clamp_window(window: CandidateWindow, duration_ms: int) -> CandidateWindow:
@@ -442,9 +620,14 @@ def _clamp_window(window: CandidateWindow, duration_ms: int) -> CandidateWindow:
             0,
             0,
             transcript=window.transcript,
+            segments=window.segments,
+            words=window.words,
             reasons=window.reasons,
             anchor_kind=window.anchor_kind,
             anchor_ms=window.anchor_ms,
+            spike_delta_lufs=window.spike_delta_lufs,
+            hook_density=window.hook_density,
+            score=window.score,
         )
 
     start_ms = max(0, min(window.start_ms, duration_ms))
@@ -471,9 +654,14 @@ def _clamp_window(window: CandidateWindow, duration_ms: int) -> CandidateWindow:
         start_ms=start_ms,
         end_ms=end_ms,
         transcript=window.transcript,
+        segments=window.segments,
+        words=window.words,
         reasons=_dedupe_reasons(window.reasons),
         anchor_kind=window.anchor_kind,
         anchor_ms=window.anchor_ms,
+        spike_delta_lufs=window.spike_delta_lufs,
+        hook_density=window.hook_density,
+        score=window.score,
     )
 
 
@@ -545,6 +733,10 @@ def _should_extend_backward_one_segment(
     return anchor.kind == "energy" and anchor.anchor_ms - current.start_ms > 2_000
 
 
+def _dedupe_strength_key(window: CandidateWindow) -> tuple[float, int, int, int, int]:
+    return (-window.score, *_anchor_strength_key(window))
+
+
 def _anchor_strength_key(window: CandidateWindow) -> tuple[int, int, int, int]:
     return (
         _anchor_kind_priority(window.anchor_kind),
@@ -560,6 +752,56 @@ def _anchor_kind_priority(kind: str) -> int:
     if kind == "energy":
         return 1
     return 2
+
+
+def _selection_score_key(window: CandidateWindow) -> tuple[float, int, int, int]:
+    return (-window.score, window.start_ms, window.end_ms, window.anchor_ms)
+
+
+def _timeline_order(windows: list[CandidateWindow]) -> list[CandidateWindow]:
+    return sorted(
+        windows,
+        key=lambda window: (window.start_ms, window.end_ms, window.anchor_ms),
+    )
+
+
+def _timeline_bucket(
+    window: CandidateWindow,
+    duration_ms: int,
+    bucket_count: int,
+) -> int:
+    if duration_ms <= 0 or bucket_count <= 1:
+        return 0
+    bucket_width_ms = max(1.0, duration_ms / bucket_count)
+    anchor_ms = max(0, min(window.anchor_ms, max(0, duration_ms - 1)))
+    return min(bucket_count - 1, int(anchor_ms / bucket_width_ms))
+
+
+def _hook_density(
+    segments: list[TranscriptSegment],
+    start_ms: int,
+    end_ms: int,
+) -> float:
+    duration_seconds = max(1.0, (end_ms - start_ms) / 1000)
+    hook_hits = sum(len(hook_reasons(segment.text)) for segment in segments)
+    return hook_hits / duration_seconds
+
+
+def _score_window(
+    anchor_kind: str,
+    spike_delta_lufs: float,
+    hook_density: float,
+) -> float:
+    hook_score = hook_density * 100
+    spike_score = max(0.0, spike_delta_lufs) * 1.5
+    anchor_score = (
+        4.0
+        if anchor_kind == "hook"
+        else 2.0
+        if anchor_kind == "energy"
+        else 0.0
+    )
+    return anchor_score + hook_score + spike_score
 
 
 def _window_iou(first: CandidateWindow, second: CandidateWindow) -> float:
@@ -580,8 +822,12 @@ def _window_iou(first: CandidateWindow, second: CandidateWindow) -> float:
     return intersection / union
 
 
-def _overlaps(segment: TranscriptSegment, start_ms: int, end_ms: int) -> bool:
-    return segment.end_ms > start_ms and segment.start_ms < end_ms
+def _overlaps(
+    item: TranscriptSegment | TranscriptWord,
+    start_ms: int,
+    end_ms: int,
+) -> bool:
+    return item.end_ms > start_ms and item.start_ms < end_ms
 
 
 def _dedupe_reasons(reasons: list[str]) -> list[str]:

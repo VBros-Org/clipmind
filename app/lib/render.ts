@@ -83,7 +83,7 @@ export async function renderClip(
         trim_start_ms: clip.trimStartMs ?? 0,
         trim_end_ms: clip.trimEndMs ?? 0,
         preset_id: presetId,
-        transcript: clip.transcript ?? undefined,
+        transcript: clip.transcriptTiming ?? clip.transcript ?? undefined,
       }),
     });
 

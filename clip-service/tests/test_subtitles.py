@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from src.presets import CAPTION_PRESETS
 from src.subtitles import generate_ass, transcript_for_cut
 from src.transcribe import Transcript, TranscriptSegment, TranscriptWord
+
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
 def test_static_ass_wraps_lines_without_karaoke_tags() -> None:
@@ -48,6 +52,30 @@ def test_karaoke_ass_uses_word_timing_tags_and_wraps_lines() -> None:
     assert r"{\k20}One" in ass
     assert r"{\k20}five" in ass
     assert r"four\N{\k20}five" in ass
+
+
+def test_karaoke_ass_matches_timed_fixture() -> None:
+    transcript = Transcript(
+        text="Wait this lands now",
+        segments=[
+            TranscriptSegment(
+                start_ms=5_000,
+                end_ms=6_200,
+                text="Wait this lands now",
+            )
+        ],
+        words=[
+            TranscriptWord(start_ms=5_000, end_ms=5_250, word="Wait"),
+            TranscriptWord(start_ms=5_250, end_ms=5_700, word="this"),
+            TranscriptWord(start_ms=5_700, end_ms=5_950, word="lands"),
+            TranscriptWord(start_ms=5_950, end_ms=6_200, word="now"),
+        ],
+    )
+    cut = transcript_for_cut(transcript, 5_000, 7_000)
+
+    ass = generate_ass(cut, CAPTION_PRESETS["karaoke"], 2_000)
+
+    assert ass == (FIXTURES_DIR / "karaoke_timed.ass").read_text(encoding="utf-8")
 
 
 def test_transcript_for_cut_shifts_absolute_timestamps() -> None:

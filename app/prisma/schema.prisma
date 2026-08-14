@@ -107,6 +107,7 @@ model Clip {
   postCopy         String? // legacy default post-copy; mirrors postCopyVariants.tiktok
   postCopyVariants Json? // post-copy variants: { youtube, tiktok, instagram }
   transcript       String?
+  transcriptTiming Json? // timed transcript object: { text, segments, words } with source-absolute ms
   reasons          Json?
   mindRank         Int? // Mind ranking metadata only, 1 = best
   mindRankReason   String?

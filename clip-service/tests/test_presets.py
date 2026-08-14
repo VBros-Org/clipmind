@@ -7,6 +7,11 @@ def test_caption_preset_registry_is_valid() -> None:
     validate_caption_presets()
 
     assert set(CAPTION_PRESETS) == {"clean-bold", "outline-pop", "karaoke"}
+    assert {preset.font for preset in CAPTION_PRESETS.values()} == {
+        "DejaVu Sans",
+        "DejaVu Sans Condensed",
+        "DejaVu Serif",
+    }
     assert (
         sum(
             1

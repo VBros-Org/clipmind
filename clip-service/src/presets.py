@@ -30,7 +30,7 @@ class CaptionPreset:
 # Clean bold: white lower-third captions for readable gameplay overlays.
 CLEAN_BOLD = CaptionPreset(
     preset_id="clean-bold",
-    font="Arial",
+    font="DejaVu Sans",
     font_size=82,
     primary_color="&H00FFFFFF",
     secondary_color="&H00FFFFFF",
@@ -49,7 +49,7 @@ CLEAN_BOLD = CaptionPreset(
 # Outline pop: larger amber captions with a thicker outline for noisy footage.
 OUTLINE_POP = CaptionPreset(
     preset_id="outline-pop",
-    font="Arial",
+    font="DejaVu Serif",
     font_size=92,
     primary_color="&H006DE6FF",
     secondary_color="&H006DE6FF",
@@ -68,7 +68,7 @@ OUTLINE_POP = CaptionPreset(
 # Karaoke: word-timed yellow highlight, kept as the only karaoke preset.
 KARAOKE = CaptionPreset(
     preset_id="karaoke",
-    font="Arial",
+    font="DejaVu Sans Condensed",
     font_size=84,
     primary_color="&H0000D7FF",
     secondary_color="&H00FFFFFF",

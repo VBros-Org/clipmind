@@ -34,6 +34,20 @@ test("renderClip uploads clip-service output and persists renderedUrl", async ()
       trimEndMs: 500,
       status: "accepted",
       transcript: "This is the moment.",
+      transcriptTiming: {
+        text: "This is the moment.",
+        segments: [
+          {
+            start_ms: 1_000,
+            end_ms: 3_000,
+            text: "This is the moment.",
+          },
+        ],
+        words: [
+          { start_ms: 1_000, end_ms: 1_300, word: "This" },
+          { start_ms: 1_300, end_ms: 1_600, word: "is" },
+        ],
+      },
     },
   });
 
@@ -91,7 +105,20 @@ test("renderClip uploads clip-service output and persists renderedUrl", async ()
       trim_start_ms: 250,
       trim_end_ms: 500,
       preset_id: "clean-bold",
-      transcript: "This is the moment.",
+      transcript: {
+        text: "This is the moment.",
+        segments: [
+          {
+            start_ms: 1_000,
+            end_ms: 3_000,
+            text: "This is the moment.",
+          },
+        ],
+        words: [
+          { start_ms: 1_000, end_ms: 1_300, word: "This" },
+          { start_ms: 1_300, end_ms: 1_600, word: "is" },
+        ],
+      },
     });
 
     const updatedClip = await prisma.clip.findUniqueOrThrow({
