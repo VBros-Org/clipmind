@@ -111,6 +111,7 @@ test("runPipeline triggers scheduling and taste feedback after the pipeline reac
         endMs: 70_000,
         transcript: "Already accepted before completion.",
         status: "accepted",
+        renderedUrl: "https://cdn.example/rendered-accepted-before-completion.mp4",
       },
     });
     await prisma.schedule.create({
@@ -164,6 +165,87 @@ test("runPipeline triggers scheduling and taste feedback after the pipeline reac
       tiktok: "Accepted clip for TikTok #clipmind",
       instagram: "Accepted clip on Instagram.\nExtra context here\n\n#clipmind",
     });
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("runPipeline guards ranking writes when a candidate status changes during ranking", async () => {
+  const fixture = await createPipelineFixture();
+  let changedClipId: string | null = null;
+  const mindsClient = {
+    async sendMessageAndWaitForReply() {
+      const changedClip = await prisma.clip.findFirstOrThrow({
+        where: {
+          creatorId: fixture.creatorId,
+          videoId: fixture.videoId,
+          status: "candidate",
+        },
+        orderBy: {
+          createdAt: "asc",
+        },
+        select: {
+          id: true,
+        },
+      });
+      changedClipId = changedClip.id;
+      await prisma.clip.update({
+        where: {
+          id: changedClip.id,
+        },
+        data: {
+          status: "accepted",
+        },
+      });
+
+      return JSON.stringify([
+        { index: 1, reason: "Changed while ranking." },
+        { index: 2, reason: "Still a candidate." },
+      ]);
+    },
+  };
+
+  try {
+    const result = await runPipeline(fixture.videoId, {
+      prismaClient: prisma,
+      ingestOptions: fakeIngestOptions(fixture.videoId),
+      rankOptions: {
+        mindsClient,
+      },
+      generateClipThumbnailImpl: fakeThumbnailImpl(),
+    });
+
+    assert.equal(result.status, "failed");
+    assert.match(
+      result.error,
+      /^ranking: Ranking status assertion failed (?:before|during) ranking write:/,
+    );
+    assert.ok(changedClipId);
+
+    const clips = await prisma.clip.findMany({
+      where: {
+        creatorId: fixture.creatorId,
+        videoId: fixture.videoId,
+      },
+      orderBy: {
+        createdAt: "asc",
+      },
+      select: {
+        id: true,
+        status: true,
+        mindRank: true,
+        mindRankReason: true,
+      },
+    });
+    assert.equal(clips.find((clip) => clip.id === changedClipId)?.status, "accepted");
+    assert.deepEqual(
+      clips.map((clip) => [clip.mindRank, clip.mindRankReason]),
+      [
+        [null, null],
+        [null, null],
+        [null, null],
+      ],
+    );
   } finally {
     await cleanupFixture(fixture);
   }

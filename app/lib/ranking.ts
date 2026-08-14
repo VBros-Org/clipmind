@@ -420,7 +420,7 @@ class PrismaRankingStore implements RankingStore {
     const expectedStatusById = new Map(
       args.clips.map((clip) => [clip.id, clip.status]),
     );
-      const ids = args.rankings.map((ranking) => ranking.clipId);
+    const ids = args.rankings.map((ranking) => ranking.clipId);
 
     return this.db.$transaction(async (tx) => {
       const before = await tx.clip.findMany({
@@ -437,15 +437,21 @@ class PrismaRankingStore implements RankingStore {
       assertStoredStatuses(expectedStatusById, before, "before ranking write");
 
       for (const ranking of args.rankings) {
-        await tx.clip.update({
+        const updateResult = await tx.clip.updateMany({
           where: {
             id: ranking.clipId,
+            status: ranking.expectedStatus,
           },
           data: {
             mindRank: ranking.mindRank,
             mindRankReason: ranking.reason,
           },
         });
+        if (updateResult.count !== 1) {
+          throw new Error(
+            `Ranking status assertion failed during ranking write: clip ${ranking.clipId} changed from ${ranking.expectedStatus}.`,
+          );
+        }
       }
 
       const after = await tx.clip.findMany({

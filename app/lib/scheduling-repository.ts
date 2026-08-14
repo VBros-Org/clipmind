@@ -2,6 +2,11 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 
 import { prisma } from "./db";
 import {
+  ClipReadinessError,
+  assertClipReadyToPost,
+  readyToPostClipWhere,
+} from "./readiness";
+import {
   assertClipStatusTransition,
   computeNextSlot,
   pickNextClip,
@@ -81,6 +86,7 @@ export async function scheduleTick(
       where: {
         creatorId,
         status: "accepted",
+        AND: [readyToPostClipWhere()],
       },
       select: {
         id: true,
@@ -164,6 +170,7 @@ export async function scheduleTick(
       where: {
         id: selectedClip.id,
         status: "accepted",
+        AND: [readyToPostClipWhere()],
       },
       data: {
         status: "scheduled",
@@ -172,7 +179,7 @@ export async function scheduleTick(
     });
 
     if (updateResult.count !== 1) {
-      throw new Error(`Clip ${selectedClip.id} was not accepted at update time.`);
+      throw new ClipReadinessError("post");
     }
 
     await tx.schedule.update({
@@ -228,6 +235,7 @@ export async function runSchedulePass(
     where: {
       creatorId,
       status: "accepted",
+      AND: [readyToPostClipWhere()],
     },
   });
   const scheduled: Extract<ScheduleTickResult, { status: "scheduled" }>[] = [];
@@ -268,6 +276,8 @@ export async function markPosted(
         videoId: true,
         status: true,
         scheduledFor: true,
+        renderedUrl: true,
+        postCopyVariants: true,
       },
     });
 
@@ -277,11 +287,13 @@ export async function markPosted(
 
     const fromStatus = toClipSchedulingStatus(clip.status);
     assertClipStatusTransition(fromStatus, "posted");
+    assertClipReadyToPost(clip);
 
     const updateResult = await tx.clip.updateMany({
       where: {
         id: clip.id,
         status: "scheduled",
+        AND: [readyToPostClipWhere()],
       },
       data: {
         status: "posted",
@@ -290,7 +302,7 @@ export async function markPosted(
     });
 
     if (updateResult.count !== 1) {
-      throw new Error(`Clip ${clip.id} was not scheduled at update time.`);
+      throw new ClipReadinessError("post");
     }
 
     return {
@@ -326,6 +338,8 @@ export async function markPostedForCreator(
         videoId: true,
         status: true,
         scheduledFor: true,
+        renderedUrl: true,
+        postCopyVariants: true,
       },
     });
 
@@ -335,12 +349,14 @@ export async function markPostedForCreator(
 
     const fromStatus = toClipSchedulingStatus(clip.status);
     assertClipStatusTransition(fromStatus, "posted");
+    assertClipReadyToPost(clip);
 
     const updateResult = await tx.clip.updateMany({
       where: {
         id: clip.id,
         creatorId,
         status: "scheduled",
+        AND: [readyToPostClipWhere()],
       },
       data: {
         status: "posted",
@@ -349,7 +365,7 @@ export async function markPostedForCreator(
     });
 
     if (updateResult.count !== 1) {
-      throw new Error(`Clip ${clip.id} was not scheduled at update time.`);
+      throw new ClipReadinessError("post");
     }
 
     return {
