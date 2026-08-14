@@ -48,7 +48,7 @@ def _run_checked(command: list[str], label: str) -> subprocess.CompletedProcess[
         raise RuntimeError(f"{label} failed{detail}") from exc
 
 
-def probe_video_duration_ms(video_path: Path) -> int:
+def probe_video_duration_ms(video_path: Path | str) -> int:
     result = _run_checked(
         [
             "ffprobe",

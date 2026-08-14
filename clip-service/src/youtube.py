@@ -199,8 +199,14 @@ def download_youtube_audio(
         "skip_download": True,
     }
     metadata = _extract_info(normalized_url, metadata_options, download=False)
+    live_status = str(metadata.get("live_status") or "").strip()
+    if live_status != "not_live":
+        raise YoutubeValidationError("Live YouTube URLs are not supported.")
+
     duration_s = _duration_seconds(metadata.get("duration"))
-    if duration_s is not None and duration_s > max_duration_s:
+    if duration_s is None:
+        raise YoutubeValidationError("YouTube video duration is unavailable.")
+    if duration_s > max_duration_s:
         raise YoutubeDurationError(duration_s, max_duration_s)
 
     output_template = str(temp_dir / "remote.%(ext)s")

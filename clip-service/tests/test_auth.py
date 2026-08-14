@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from src import main
@@ -78,3 +80,44 @@ def test_candidates_accepts_valid_token_with_mocked_transcription(monkeypatch) -
             }
         ],
     }
+
+
+def test_candidates_source_url_uses_deliberate_two_gb_cap(monkeypatch) -> None:
+    reset_settings_cache()
+    caps: list[int] = []
+    transcript = Transcript(
+        text="Wait, this is the moment.",
+        segments=[
+            TranscriptSegment(
+                start_ms=0,
+                end_ms=12_000,
+                text="Wait, this is the moment.",
+            )
+        ],
+        words=[],
+    )
+
+    def fake_download(source_url: str, temp_dir: Path, max_bytes: int) -> Path:
+        caps.append(max_bytes)
+        video_path = temp_dir / "source.mp4"
+        video_path.write_bytes(b"fake video")
+        return video_path
+
+    monkeypatch.setattr(main, "_download_source_url", fake_download)
+    monkeypatch.setattr(main, "probe_video_duration_ms", lambda video_path: 20_000)
+    monkeypatch.setattr(
+        main,
+        "transcribe_video",
+        lambda video_path, api_key, work_dir, duration_ms: transcript,
+    )
+    monkeypatch.setattr(main, "build_candidates", lambda *args: [])
+
+    client = TestClient(main.app)
+    response = client.post(
+        "/candidates",
+        headers={"Authorization": "Bearer test-service-token"},
+        json={"source_url": "https://storage.example/large-source.mp4"},
+    )
+
+    assert response.status_code == 200
+    assert caps == [main.MAX_CANDIDATES_SOURCE_BYTES]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -13,10 +14,17 @@ OUTPUT_WIDTH = 1080
 OUTPUT_HEIGHT = 1920
 THUMBNAIL_WIDTH = 540
 THUMBNAIL_HEIGHT = 960
+RENDER_DURATION_TOLERANCE_MS = 1_500
+
+
+class RenderOutputValidationError(RuntimeError):
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(message)
 
 
 def cut_segment_for_transcription(
-    source_path: Path,
+    source_path: Path | str,
     output_path: Path,
     start_ms: int,
     duration_ms: int,
@@ -28,12 +36,7 @@ def cut_segment_for_transcription(
             "-loglevel",
             "error",
             "-y",
-            "-ss",
-            _seconds_arg(start_ms),
-            "-i",
-            str(source_path),
-            "-t",
-            _seconds_arg(duration_ms),
+            *_seeked_input_args(source_path, start_ms, start_ms + duration_ms),
             "-map",
             "0:v?",
             "-map",
@@ -57,7 +60,7 @@ def cut_segment_for_transcription(
 
 
 def render_cut_with_subtitles(
-    source_path: Path,
+    source_path: Path | str,
     output_path: Path,
     transcript: Transcript,
     preset: CaptionPreset,
@@ -87,12 +90,7 @@ def render_cut_with_subtitles(
             "-loglevel",
             "error",
             "-y",
-            "-ss",
-            _seconds_arg(start_ms),
-            "-i",
-            str(source_path),
-            "-t",
-            _seconds_arg(duration_ms),
+            *_seeked_input_args(source_path, start_ms, start_ms + duration_ms),
             "-map",
             "0:v:0",
             "-map",
@@ -120,7 +118,7 @@ def render_cut_with_subtitles(
 
 
 def render_thumbnail_frame(
-    source_path: Path,
+    source_path: Path | str,
     output_path: Path,
     timestamp_ms: int,
     width: int = THUMBNAIL_WIDTH,
@@ -141,10 +139,7 @@ def render_thumbnail_frame(
             "-loglevel",
             "error",
             "-y",
-            "-ss",
-            _seconds_arg(timestamp_ms),
-            "-i",
-            str(source_path),
+            *_seeked_input_args(source_path, timestamp_ms, timestamp_ms + 1_000),
             "-frames:v",
             "1",
             "-map",
@@ -157,6 +152,84 @@ def render_thumbnail_frame(
         ],
         "ffmpeg thumbnail render",
     )
+
+
+def validate_rendered_video(output_path: Path, expected_duration_ms: int) -> None:
+    if not output_path.exists() or output_path.stat().st_size <= 0:
+        raise RenderOutputValidationError(
+            "empty_render_output",
+            "ffmpeg produced an empty clip.",
+        )
+
+    try:
+        result = _run_checked(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_type",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "json",
+                str(output_path),
+            ],
+            "ffprobe rendered clip",
+        )
+    except RuntimeError as exc:
+        raise RenderOutputValidationError("render_probe_failed", str(exc)) from exc
+
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RenderOutputValidationError(
+            "render_probe_invalid",
+            "ffprobe returned invalid JSON for the rendered clip.",
+        ) from exc
+
+    streams = payload.get("streams")
+    if not isinstance(streams, list) or not any(
+        isinstance(stream, dict) and stream.get("codec_type") == "video"
+        for stream in streams
+    ):
+        raise RenderOutputValidationError(
+            "render_missing_video_stream",
+            "Rendered clip has no video stream.",
+        )
+
+    duration_seconds = payload.get("format", {}).get("duration")
+    if duration_seconds is None:
+        raise RenderOutputValidationError(
+            "render_duration_missing",
+            "ffprobe did not return a rendered clip duration.",
+        )
+
+    try:
+        actual_duration_ms = int(round(float(duration_seconds) * 1000))
+    except (TypeError, ValueError) as exc:
+        raise RenderOutputValidationError(
+            "render_duration_invalid",
+            "ffprobe returned an invalid rendered clip duration.",
+        ) from exc
+
+    if actual_duration_ms <= 0:
+        raise RenderOutputValidationError(
+            "render_duration_invalid",
+            "Rendered clip duration must be positive.",
+        )
+
+    tolerance_ms = max(
+        RENDER_DURATION_TOLERANCE_MS,
+        int(round(expected_duration_ms * 0.10)),
+    )
+    lower_bound_ms = max(1, expected_duration_ms - tolerance_ms)
+    upper_bound_ms = expected_duration_ms + tolerance_ms
+    if actual_duration_ms < lower_bound_ms or actual_duration_ms > upper_bound_ms:
+        raise RenderOutputValidationError(
+            "render_duration_mismatch",
+            "Rendered clip duration does not match the requested window.",
+        )
 
 
 def _run_checked(command: list[str], label: str) -> subprocess.CompletedProcess[str]:
@@ -175,6 +248,17 @@ def _run_checked(command: list[str], label: str) -> subprocess.CompletedProcess[
 
 def _seconds_arg(ms: int) -> str:
     return f"{ms / 1000:.3f}"
+
+
+def _seeked_input_args(source_path: Path | str, start_ms: int, end_ms: int) -> list[str]:
+    return [
+        "-ss",
+        _seconds_arg(start_ms),
+        "-to",
+        _seconds_arg(end_ms),
+        "-i",
+        str(source_path),
+    ]
 
 
 def _filter_path(path: Path) -> str:

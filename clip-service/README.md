@@ -7,6 +7,12 @@ Speech-first: transcribe (Whisper), surface candidate windows from speech plus c
 ## System dependency
 `ffmpeg` must be installed on the host.
 
+## Size and duration caps
+- Multipart upload bodies are capped at 2,000,000,000 bytes.
+- `/candidates` materializes URL sources because candidate building still needs full-source Whisper and audio-anchor analysis. Its URL download cap is deliberately 2,000,000,000 bytes, raised from the old 1 GB default until segmented candidate analysis is built.
+- `/cut` windows are capped at 180,000 ms (3 minutes).
+- `/cut` and `/thumbnail` JSON `source_url` requests pass the URL directly to ffmpeg with input seeking. If ffmpeg or ffprobe cannot read the URL input, the service logs a loud fallback warning and downloads the source before retrying within the same caps.
+
 ## Setup
 1. `cp .env.example .env` and fill it in.
 2. `python -m venv .venv && source .venv/bin/activate`
@@ -46,3 +52,8 @@ Optional fields:
 The response is `video/mp4`. Headers include:
 - `X-ClipMind-Duration-Ms`
 - `X-ClipMind-Preset-Id`
+
+## Thumbnail
+`POST /thumbnail` requires `Authorization: Bearer <CLIP_SERVICE_TOKEN>`.
+
+Send either multipart form data with `file`, or JSON with `source_url`. Required field: `timestamp_ms`.

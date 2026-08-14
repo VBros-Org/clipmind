@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from src import main
+from src import main, youtube
 from src.config import reset_settings_cache
 from src.transcribe import Transcript, TranscriptSegment
 from src.youtube import (
@@ -13,6 +13,7 @@ from src.youtube import (
     YoutubeDurationError,
     YoutubeValidationError,
     YoutubeVideo,
+    download_youtube_audio,
     normalize_youtube_channel_url,
 )
 
@@ -160,3 +161,46 @@ def test_transcribe_remote_cleans_temp_files_after_transcription(monkeypatch) ->
     assert response.json()["text"] == "Wait, this is the moment."
     assert temp_dirs
     assert not temp_dirs[0].exists()
+
+
+@pytest.mark.parametrize(
+    ("metadata", "message"),
+    [
+        (
+            {"live_status": "is_live", "duration": 600},
+            "Live YouTube URLs are not supported.",
+        ),
+        (
+            {"live_status": "not_live"},
+            "YouTube video duration is unavailable.",
+        ),
+    ],
+)
+def test_download_youtube_audio_rejects_live_or_durationless_before_download(
+    monkeypatch,
+    tmp_path: Path,
+    metadata: dict[str, object],
+    message: str,
+) -> None:
+    calls: list[bool] = []
+
+    def fake_extract_info(
+        url: str,
+        options: dict[str, object],
+        download: bool,
+    ) -> dict[str, object]:
+        calls.append(download)
+        if download:
+            raise AssertionError("yt-dlp download should not start.")
+        return metadata
+
+    monkeypatch.setattr(youtube, "_extract_info", fake_extract_info)
+
+    with pytest.raises(YoutubeValidationError, match=message):
+        download_youtube_audio(
+            "https://www.youtube.com/watch?v=video-id",
+            tmp_path,
+            1_200,
+        )
+
+    assert calls == [False]
