@@ -113,6 +113,40 @@ test("syncTasteFeedback marks selected clips only after a successful Mind reply"
   );
 });
 
+test("syncTasteFeedback success log omits raw Mind confirmation and alias", async () => {
+  const store = new MemoryTasteFeedbackStore({
+    mindId: "mind-1",
+    clips: [
+      memoryClip("accepted-1", "accepted", "strong human yes", 1),
+      memoryClip("rejected-1", "rejected", "flat human no", 2),
+    ],
+  });
+  const mindsClient = fakeMindsClient([
+    "Raw Mind reply with creator taste details.",
+  ]);
+  const logLines: string[] = [];
+
+  await syncTasteFeedback("creator-abc", {
+    store,
+    mindsClient,
+    clock: fixedClock(),
+    logger: {
+      error() {},
+      log(line) {
+        logLines.push(line);
+      },
+    },
+  });
+
+  assert.equal(logLines.length, 1);
+  assert.match(logLines[0] ?? "", /creatorId=creator-abc/);
+  assert.match(logLines[0] ?? "", /mindId=mind-1/);
+  assert.match(logLines[0] ?? "", /clipIds=accepted-1,rejected-1/);
+  assert.doesNotMatch(logLines[0] ?? "", /alias=/);
+  assert.doesNotMatch(logLines[0] ?? "", /confirmation=/);
+  assert.doesNotMatch(logLines[0] ?? "", /Raw Mind reply/);
+});
+
 test("syncTasteFeedback includes optional reject reasons in the Mind message", async () => {
   const store = new MemoryTasteFeedbackStore({
     mindId: "mind-1",

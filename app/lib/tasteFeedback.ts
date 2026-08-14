@@ -295,11 +295,10 @@ async function syncTasteFeedbackOnce(
       "Taste feedback synced",
       `creatorId=${creatorId}`,
       `mindId=${mindId}`,
-      `alias=${alias}`,
       `clipCount=${clipIds.length}`,
       `accepted=${accepted.length}`,
       `rejected=${rejected.length}`,
-      `confirmation=${confirmation}`,
+      `clipIds=${clipIds.join(",")}`,
     ].join(" "),
   );
 

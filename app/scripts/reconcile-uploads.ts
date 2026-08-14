@@ -1,3 +1,5 @@
+import type { PrismaClient } from "@prisma/client";
+
 import { prisma } from "../lib/db";
 import { createR2Storage, type R2Storage } from "../lib/storage";
 
@@ -20,21 +22,36 @@ type ReconcileCounts = {
   r2MultipartAborts: number;
   orphanObjects: number;
   sourceDeletes: number;
+  mediaOrphanObjects: number;
+  mediaDeletes: number;
 };
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
-  const storage = createR2Storage();
-  const cutoff = new Date(Date.now() - args.staleHours * 60 * 60 * 1000);
+type ReconcileUploadsOptions = {
+  db?: PrismaClient;
+  storage?: R2Storage;
+  now?: Date;
+  logger?: Pick<Console, "log">;
+};
+
+export async function reconcileUploads(
+  args: ParsedArgs,
+  options: ReconcileUploadsOptions = {},
+): Promise<ReconcileCounts> {
+  const db = options.db ?? prisma;
+  const storage = options.storage ?? createR2Storage();
+  const now = options.now ?? new Date();
+  const cutoff = new Date(now.getTime() - args.staleHours * 60 * 60 * 1000);
   const counts: ReconcileCounts = {
     staleIntents: 0,
     dbMultipartAborts: 0,
     r2MultipartAborts: 0,
     orphanObjects: 0,
     sourceDeletes: 0,
+    mediaOrphanObjects: 0,
+    mediaDeletes: 0,
   };
 
-  const staleIntents = await prisma.uploadIntent.findMany({
+  const staleIntents = await db.uploadIntent.findMany({
     where: {
       status: {
         in: ["creating", "uploading"],
@@ -63,7 +80,7 @@ async function main() {
   for (const intent of staleIntents) {
     if (args.execute) {
       await abortIntentMultipart(storage, intent);
-      await prisma.uploadIntent.updateMany({
+      await db.uploadIntent.updateMany({
         where: {
           id: intent.id,
           status: {
@@ -73,8 +90,8 @@ async function main() {
         data: {
           status: "aborted",
           failureReason: "Stale multipart upload reconciled.",
-          abortedAt: new Date(),
-          lastActivityAt: new Date(),
+          abortedAt: now,
+          lastActivityAt: now,
         },
       });
     }
@@ -97,7 +114,7 @@ async function main() {
       continue;
     }
 
-    const tracked = await prisma.uploadIntent.findFirst({
+    const tracked = await db.uploadIntent.findFirst({
       where: {
         sourceKey: upload.key,
         uploadId: upload.uploadId,
@@ -126,7 +143,7 @@ async function main() {
   const [videos, activeIntents] =
     sourceKeys.length > 0
       ? await Promise.all([
-          prisma.video.findMany({
+          db.video.findMany({
             where: {
               sourceKey: {
                 in: sourceKeys,
@@ -136,7 +153,7 @@ async function main() {
               sourceKey: true,
             },
           }),
-          prisma.uploadIntent.findMany({
+          db.uploadIntent.findMany({
             where: {
               sourceKey: {
                 in: sourceKeys,
@@ -172,7 +189,51 @@ async function main() {
     }
   }
 
-  console.log(
+  const mediaObjects = (
+    await Promise.all([
+      storage.listMediaObjects("clips/"),
+      storage.listMediaObjects("thumbs/"),
+    ])
+  )
+    .flat()
+    .filter((object) => mediaObjectClipId(object.key))
+    .slice(0, args.limit);
+  const mediaClipIds = [
+    ...new Set(
+      mediaObjects
+        .map((object) => mediaObjectClipId(object.key))
+        .filter((clipId): clipId is string => Boolean(clipId)),
+    ),
+  ];
+  const clips =
+    mediaClipIds.length > 0
+      ? await db.clip.findMany({
+          where: {
+            id: {
+              in: mediaClipIds,
+            },
+          },
+          select: {
+            id: true,
+          },
+        })
+      : [];
+  const clipIdsWithRows = new Set(clips.map((clip) => clip.id));
+
+  for (const object of mediaObjects) {
+    const clipId = mediaObjectClipId(object.key);
+    if (clipId && clipIdsWithRows.has(clipId)) {
+      continue;
+    }
+
+    counts.mediaOrphanObjects += 1;
+    if (args.execute) {
+      await storage.deleteMediaObject(object.key);
+      counts.mediaDeletes += 1;
+    }
+  }
+
+  (options.logger ?? console).log(
     [
       "PASSED upload reconcile",
       `dryRun=${String(!args.execute)}`,
@@ -181,8 +242,17 @@ async function main() {
       `r2MultipartAborts=${counts.r2MultipartAborts}`,
       `orphanObjects=${counts.orphanObjects}`,
       `sourceDeletes=${counts.sourceDeletes}`,
+      `mediaOrphanObjects=${counts.mediaOrphanObjects}`,
+      `mediaDeletes=${counts.mediaDeletes}`,
     ].join(" "),
   );
+
+  return counts;
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  await reconcileUploads(args);
 }
 
 async function abortIntentMultipart(
@@ -244,6 +314,11 @@ function uploadPairKey(sourceKey: string, uploadId: string): string {
   return `${sourceKey}\n${uploadId}`;
 }
 
+function mediaObjectClipId(key: string): string | null {
+  const match = /^(?:clips|thumbs)\/(.+)\.(?:mp4|jpg)$/u.exec(key.trim());
+  return match?.[1]?.trim() || null;
+}
+
 function printUsage() {
   console.log(
     [
@@ -255,16 +330,19 @@ function printUsage() {
       "  --stale-hours <hours>  Stale upload cutoff, default 24.",
       "  --limit <n>            Max rows or objects per pass, default 500.",
       "  --prefix <r2-prefix>   Source key prefix, default videos/.",
+      "  Media orphan sweep always checks clips/ and thumbs/ in the media bucket.",
     ].join("\n"),
   );
 }
 
-main()
-  .catch((error: unknown) => {
-    console.log("FAILED upload reconcile");
-    console.error(error);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+if (require.main === module) {
+  main()
+    .catch((error: unknown) => {
+      console.log("FAILED upload reconcile");
+      console.error(error);
+      process.exitCode = 1;
+    })
+    .finally(async () => {
+      await prisma.$disconnect();
+    });
+}

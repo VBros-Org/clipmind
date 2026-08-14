@@ -324,6 +324,40 @@ test("storage lists source objects for orphan reconciliation", async () => {
   ]);
 });
 
+test("storage lists media objects for orphan reconciliation", async () => {
+  const s3Client = {
+    async send(command) {
+      assert.deepEqual(recordCommand(command).input, {
+        Bucket: "clipmind-media",
+        Prefix: "clips/",
+        ContinuationToken: undefined,
+      });
+      return {
+        Contents: [
+          {
+            Key: "clips/clip_123.mp4",
+            Size: 456,
+            LastModified: new Date("2026-08-14T00:00:00.000Z"),
+          },
+        ],
+      };
+    },
+  } satisfies S3ClientLike;
+
+  const objects = await createR2Storage({
+    env: storageEnv,
+    s3Client,
+  }).listMediaObjects("clips/");
+
+  assert.deepEqual(objects, [
+    {
+      key: "clips/clip_123.mp4",
+      size: 456,
+      lastModified: new Date("2026-08-14T00:00:00.000Z"),
+    },
+  ]);
+});
+
 test("storage delete tolerates missing objects", async () => {
   const s3Client = {
     async send() {
