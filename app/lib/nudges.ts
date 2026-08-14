@@ -6,7 +6,7 @@ import {
   failedUploadNudgeTitle,
   failedUploadTitle,
 } from "./upload-stage-copy";
-import { formatCreatorLocalTime } from "./timezone";
+import { creatorLocalDateKey, formatCreatorLocalTime } from "./timezone";
 
 export const RUNWAY_WARNING_THRESHOLD_DAYS = DEFAULT_RUNWAY_THRESHOLD_DAYS;
 
@@ -225,7 +225,7 @@ export function computeDueNudges(
   assertValidDate(now, "now");
 
   const nudges: DueNudge[] = [];
-  const dateKey = utcDateKey(now);
+  const dateKey = creatorLocalDateKey(now, creator.timezone);
   const schedule = creator.schedule;
 
   // Failed uploads are always-on. Review, runway, and post toggles control
@@ -311,11 +311,6 @@ export function selectHomeNudges(input: HomeNudgeInput): HomeNudge[] {
   }
 
   return toHomeNudges(nudges);
-}
-
-export function utcDateKey(date: Date): string {
-  assertValidDate(date, "date");
-  return date.toISOString().slice(0, 10);
 }
 
 export function formatHourMinute(

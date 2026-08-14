@@ -15,6 +15,7 @@ import {
 } from "../lib/review-api";
 import { loadHomeOverview } from "../lib/app-overview";
 import type { PostCopyVariants } from "../lib/captioning";
+import { DEFAULT_SCHEDULE_SETTINGS } from "../lib/schedule-settings";
 
 type ReviewFixture = {
   creatorAId: string;
@@ -165,6 +166,81 @@ test("accept triggers deterministic scheduling when rhythm exists", async () => 
     });
     assert.equal(clip.status, "scheduled");
     assert.ok(clip.scheduledFor);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("fresh creator accept persists default rhythm and schedules from it", async () => {
+  const fixture = await createFixture();
+  let resolveRendered = () => {};
+  const rendered = new Promise<void>((resolve) => {
+    resolveRendered = resolve;
+  });
+
+  try {
+    await prisma.creator.update({
+      where: {
+        id: fixture.creatorAId,
+      },
+      data: {
+        timezone: "Asia/Bangkok",
+      },
+    });
+
+    const response = await handleAcceptClip(
+      requestWithCode(fixture.clipId, fixture.creatorACode, "POST"),
+      { id: fixture.clipId },
+      {
+        now: new Date("2026-07-27T01:00:00.000Z"),
+        renderClipImpl: async (clipId) => {
+          await prisma.clip.update({
+            where: {
+              id: clipId,
+            },
+            data: {
+              renderedUrl: "https://cdn.example/rendered-default-rhythm.mp4",
+            },
+          });
+          resolveRendered();
+          return {
+            clipId,
+            videoId: fixture.videoId,
+            renderedUrl: "https://cdn.example/rendered-default-rhythm.mp4",
+          };
+        },
+      },
+    );
+    assert.equal(response.status, 200);
+
+    const body = (await response.json()) as {
+      clip: { status: string };
+      scheduledCount: number;
+    };
+    assert.equal(body.clip.status, "accepted");
+    assert.equal(body.scheduledCount, 0);
+
+    await rendered;
+    const scheduled = await waitForScheduled(fixture.clipId);
+    assert.equal(scheduled.status, "scheduled");
+    assert.equal(
+      scheduled.scheduledFor?.toISOString(),
+      "2026-07-27T02:00:00.000Z",
+    );
+
+    const schedule = await prisma.schedule.findUniqueOrThrow({
+      where: {
+        creatorId: fixture.creatorAId,
+      },
+      select: {
+        slots: true,
+        slotTimes: true,
+        slotsPerDay: true,
+      },
+    });
+    assert.deepEqual(schedule.slots, DEFAULT_SCHEDULE_SETTINGS.slotTimes);
+    assert.deepEqual(schedule.slotTimes, DEFAULT_SCHEDULE_SETTINGS.slotTimes);
+    assert.equal(schedule.slotsPerDay, DEFAULT_SCHEDULE_SETTINGS.slotsPerDay);
   } finally {
     await cleanupFixture(fixture);
   }
@@ -577,6 +653,70 @@ test("posted API only transitions scheduled clips for the owning creator", async
       postedClip.postedAt?.toISOString(),
       "2026-07-28T12:00:00.000Z",
     );
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("posted API counts this week with creator-local week boundaries", async () => {
+  const fixture = await createFixture();
+
+  try {
+    await prisma.creator.update({
+      where: {
+        id: fixture.creatorAId,
+      },
+      data: {
+        timezone: "America/Los_Angeles",
+      },
+    });
+    const priorVideo = await prisma.video.create({
+      data: {
+        creatorId: fixture.creatorAId,
+        contentKey: `${fixture.videoId}-prior-local-week`,
+        sourceUrl: "https://example.com/prior.mp4",
+        status: "clipped",
+        pipelineStage: "done",
+      },
+    });
+    await prisma.clip.create({
+      data: {
+        creatorId: fixture.creatorAId,
+        videoId: priorVideo.id,
+        startMs: 20_000,
+        endMs: 30_000,
+        status: "posted",
+        renderedUrl: "https://cdn.example/prior.mp4",
+        postCopyVariants: postCopyVariants("Prior local Sunday"),
+        scheduledFor: new Date("2026-07-27T06:00:00.000Z"),
+        postedAt: new Date("2026-07-27T06:30:00.000Z"),
+      },
+    });
+    await prisma.clip.update({
+      where: {
+        id: fixture.clipId,
+      },
+      data: {
+        status: "scheduled",
+        scheduledFor: new Date("2026-07-27T07:30:00.000Z"),
+        renderedUrl: "https://cdn.example/current.mp4",
+        postCopyVariants: postCopyVariants("Current local Monday"),
+      },
+    });
+
+    const response = await handleMarkClipPosted(
+      requestWithCode(fixture.clipId, fixture.creatorACode, "POST"),
+      { id: fixture.clipId },
+      {
+        now: new Date("2026-07-27T08:00:00.000Z"),
+      },
+    );
+    assert.equal(response.status, 200);
+
+    const body = (await response.json()) as {
+      postedThisWeek: number;
+    };
+    assert.equal(body.postedThisWeek, 1);
   } finally {
     await cleanupFixture(fixture);
   }

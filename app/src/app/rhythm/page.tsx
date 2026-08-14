@@ -1,6 +1,5 @@
 import { loadAppFrameData, loadRhythmOverview } from "../../../lib/app-overview";
 import { channelPullStatusResponse } from "../../../lib/channelPull";
-import { DEFAULT_SCHEDULE_SETTINGS } from "../../../lib/schedule-settings";
 import { AppShell } from "../AppShell";
 import { requireCreatorSession } from "../app-session";
 
@@ -43,7 +42,8 @@ export default async function RhythmPage({ searchParams }: RhythmPageProps) {
 
         <RhythmControls
           highlightPushNudges={params.push === "fix"}
-          initialSettings={overview.schedule ?? DEFAULT_SCHEDULE_SETTINGS}
+          initialSettings={overview.schedule}
+          initialTimezone={overview.creator.timezone}
         />
 
         <VoiceCard

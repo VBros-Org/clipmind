@@ -17,7 +17,12 @@ import {
   hasCompletePostCopyVariants,
   readyToPostClipWhere,
 } from "./readiness";
-import { scheduleSettingsFromRow, type ScheduleSettings } from "./schedule-settings";
+import {
+  scheduleSettingsFromRow,
+  type ScheduleSettings,
+} from "./schedule-settings";
+import { ensureScheduleForCreator } from "./scheduling-repository";
+import { resolveCreatorTimezone } from "./timezone";
 import { publicMediaUrlForKey } from "./storage";
 import { formatVideoLabel } from "./video-label";
 import { captionCorpusSummary } from "./caption-corpus";
@@ -87,7 +92,7 @@ export type UploadOverview = {
 };
 
 export type RhythmOverview = {
-  schedule: ScheduleSettings | null;
+  schedule: ScheduleSettings;
   creator: {
     displayName: string | null;
     channelUrl: string | null;
@@ -97,6 +102,7 @@ export type RhythmOverview = {
     channelPullStage: string | null;
     channelPullError: string | null;
     hasMind: boolean;
+    timezone: string;
   };
 };
 
@@ -456,24 +462,16 @@ export async function loadRhythmOverview(
       channelPullStage: true,
       channelPullError: true,
       mindId: true,
-      schedule: {
-        select: {
-          slotsPerDay: true,
-          anchorHour: true,
-          slotTimes: true,
-          reviewReminders: true,
-          runwayWarnings: true,
-          runwayThresholdDays: true,
-          postTimeNudges: true,
-          pushNudges: true,
-        },
-      },
+      timezone: true,
     },
+  });
+  const schedule = await ensureScheduleForCreator(creatorId, {
+    prismaClient: db,
   });
   const corpus = captionCorpusSummary(creator.captionCorpus);
 
   return {
-    schedule: scheduleSettingsFromRow(creator.schedule),
+    schedule,
     creator: {
       displayName: creator.displayName,
       channelUrl: creator.channelUrl,
@@ -483,6 +481,7 @@ export async function loadRhythmOverview(
       channelPullStage: creator.channelPullStage,
       channelPullError: creator.channelPullError,
       hasMind: Boolean(creator.mindId?.trim()),
+      timezone: resolveCreatorTimezone(creator.timezone),
     },
   };
 }

@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 
 import { prisma } from "../lib/db";
 import {
+  DEFAULT_SCHEDULE_SETTINGS,
+  buildSlotLabels,
+} from "../lib/schedule-settings";
+import {
   markPosted,
   runSchedulePass,
   scheduleTick,
@@ -18,7 +22,7 @@ type ScheduledTickResult = Extract<
 async function main() {
   const marker = `scheduling-db-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-  let creatorId: string | null = null;
+  const creatorIds: string[] = [];
 
   try {
     const creator = await prisma.creator.create({
@@ -30,7 +34,7 @@ async function main() {
         },
       },
     });
-    creatorId = creator.id;
+    creatorIds.push(creator.id);
 
     const videoA = await prisma.video.create({
       data: {
@@ -307,6 +311,154 @@ async function main() {
       /not ready to post/,
     );
 
+    const freshCreator = await prisma.creator.create({
+      data: {
+        channelUrl: `https://example.com/${marker}/fresh`,
+        timezone: "Asia/Bangkok",
+        captionStyle: {
+          preset: "clean-bold",
+        },
+      },
+    });
+    creatorIds.push(freshCreator.id);
+    const freshVideo = await prisma.video.create({
+      data: {
+        creatorId: freshCreator.id,
+        contentKey: `${marker}-fresh-video`,
+        sourceUrl: "https://example.com/fresh.mp4",
+        status: "clipped",
+      },
+    });
+    await prisma.clip.create({
+      data: {
+        creatorId: freshCreator.id,
+        videoId: freshVideo.id,
+        startMs: 1_000,
+        endMs: 11_000,
+        status: "accepted",
+        ...readyPostFields("fresh-default"),
+      },
+    });
+    const freshPass = await runSchedulePass(
+      freshCreator.id,
+      date("2026-07-27T01:00:00.000Z"),
+    );
+    assert.equal(freshPass.status, "done");
+    assert.equal(freshPass.scheduled.length, 1);
+    assert.equal(
+      freshPass.scheduled[0]?.scheduledFor.toISOString(),
+      "2026-07-27T02:00:00.000Z",
+    );
+    const freshSchedule = await prisma.schedule.findUniqueOrThrow({
+      where: {
+        creatorId: freshCreator.id,
+      },
+      select: {
+        slots: true,
+        slotTimes: true,
+        slotsPerDay: true,
+      },
+    });
+    assert.deepEqual(
+      freshSchedule.slots,
+      buildSlotLabels(DEFAULT_SCHEDULE_SETTINGS),
+    );
+    assert.deepEqual(
+      freshSchedule.slotTimes,
+      DEFAULT_SCHEDULE_SETTINGS.slotTimes,
+    );
+    assert.equal(
+      freshSchedule.slotsPerDay,
+      DEFAULT_SCHEDULE_SETTINGS.slotsPerDay,
+    );
+
+    const timezoneCreator = await prisma.creator.create({
+      data: {
+        channelUrl: `https://example.com/${marker}/timezone`,
+        timezone: "UTC",
+        captionStyle: {
+          preset: "clean-bold",
+        },
+      },
+    });
+    creatorIds.push(timezoneCreator.id);
+    const timezoneVideo = await prisma.video.create({
+      data: {
+        creatorId: timezoneCreator.id,
+        contentKey: `${marker}-timezone-video`,
+        sourceUrl: "https://example.com/timezone.mp4",
+        status: "clipped",
+      },
+    });
+    const postedBeforeTimezoneChange = await prisma.clip.create({
+      data: {
+        creatorId: timezoneCreator.id,
+        videoId: timezoneVideo.id,
+        startMs: 1_000,
+        endMs: 11_000,
+        status: "posted",
+        scheduledFor: date("2026-07-27T09:00:00.000Z"),
+        postedAt: date("2026-07-27T09:30:00.000Z"),
+        ...readyPostFields("posted-before-timezone"),
+      },
+    });
+    await prisma.schedule.create({
+      data: {
+        creatorId: timezoneCreator.id,
+        slots: ["09:00"],
+        slotTimes: ["09:00"],
+        rotation: {},
+        slotsPerDay: 1,
+      },
+    });
+    await prisma.clip.create({
+      data: {
+        creatorId: timezoneCreator.id,
+        videoId: timezoneVideo.id,
+        startMs: 12_000,
+        endMs: 22_000,
+        status: "accepted",
+        ...readyPostFields("after-timezone-change"),
+      },
+    });
+    await prisma.creator.update({
+      where: {
+        id: timezoneCreator.id,
+      },
+      data: {
+        timezone: "Asia/Bangkok",
+      },
+    });
+    const timezonePass = await runSchedulePass(
+      timezoneCreator.id,
+      date("2026-07-28T01:00:00.000Z"),
+    );
+    assert.equal(timezonePass.status, "done");
+    assert.equal(timezonePass.scheduled.length, 1);
+    assert.equal(
+      timezonePass.scheduled[0]?.scheduledFor.toISOString(),
+      "2026-07-28T02:00:00.000Z",
+    );
+    const unchangedPosted = await prisma.clip.findUniqueOrThrow({
+      where: {
+        id: postedBeforeTimezoneChange.id,
+      },
+      select: {
+        status: true,
+        scheduledFor: true,
+        postedAt: true,
+      },
+    });
+    assert.equal(unchangedPosted.status, "posted");
+    assert.equal(
+      unchangedPosted.scheduledFor?.toISOString(),
+      "2026-07-27T09:00:00.000Z",
+    );
+    assert.equal(
+      unchangedPosted.postedAt?.toISOString(),
+      "2026-07-27T09:30:00.000Z",
+    );
+
     console.log(
       [
         "PASSED scheduling DB tests",
@@ -320,31 +472,41 @@ async function main() {
         `postedClip=${posted.clipId}`,
         `postedAt=${posted.postedAt.toISOString()}`,
         `passScheduled=${passResult.scheduled.length}`,
+        `freshDefault=${freshPass.scheduled[0]?.scheduledFor.toISOString()}`,
+        `timezoneFuture=${timezonePass.scheduled[0]?.scheduledFor.toISOString()}`,
       ].join(" "),
     );
   } catch (error) {
     console.log("FAILED scheduling DB tests");
     throw error;
   } finally {
-    if (creatorId) {
+    if (creatorIds.length > 0) {
       await prisma.schedule.deleteMany({
         where: {
-          creatorId,
+          creatorId: {
+            in: creatorIds,
+          },
         },
       });
       await prisma.clip.deleteMany({
         where: {
-          creatorId,
+          creatorId: {
+            in: creatorIds,
+          },
         },
       });
       await prisma.video.deleteMany({
         where: {
-          creatorId,
+          creatorId: {
+            in: creatorIds,
+          },
         },
       });
-      await prisma.creator.delete({
+      await prisma.creator.deleteMany({
         where: {
-          id: creatorId,
+          id: {
+            in: creatorIds,
+          },
         },
       });
     }

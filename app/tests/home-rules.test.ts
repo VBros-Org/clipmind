@@ -10,10 +10,10 @@ import {
 import {
   consumePostedWin,
   postedWinMessage,
-  startOfUtcWeek,
   storePostedWin,
   type PostedWinStorage,
 } from "../lib/posted-win";
+import { startOfCreatorLocalWeekUtc } from "../lib/timezone";
 import { selectHomeUploadCards } from "../lib/home-upload-cards";
 
 test("computeRunway divides queued clips by slots per day", () => {
@@ -212,6 +212,33 @@ test("computeDueNudges projects to the same Home nudge cards", () => {
       ["runway", "2026-07-29"],
       ["post", `clip-1:${scheduledFor.toISOString()}`],
     ],
+  );
+});
+
+test("computeDueNudges uses creator-local date keys", () => {
+  const due = computeDueNudges(
+    {
+      id: "creator-1",
+      timezone: "America/Los_Angeles",
+      reviewCount: 1,
+      queuedClipCount: 0,
+      schedule: {
+        slotsPerDay: 1,
+        reviewReminders: true,
+        runwayWarnings: false,
+        runwayThresholdDays: 2,
+        postTimeNudges: false,
+        pushNudges: true,
+      },
+      scheduledClips: [],
+      failedVideos: [],
+    },
+    new Date("2026-07-27T06:30:00.000Z"),
+  );
+
+  assert.deepEqual(
+    due.map((nudge) => [nudge.kind, nudge.dedupeKey]),
+    [["review", "2026-07-26"]],
   );
 });
 
@@ -424,10 +451,13 @@ test("posted win storage is consumed once for navigation dismissal", () => {
   assert.equal(postedWinMessage(1), "Posted. 1 this week.");
 });
 
-test("startOfUtcWeek returns Monday start", () => {
+test("startOfCreatorLocalWeekUtc returns Monday start in creator timezone", () => {
   assert.equal(
-    startOfUtcWeek(new Date("2026-07-29T12:00:00.000Z")).toISOString(),
-    "2026-07-27T00:00:00.000Z",
+    startOfCreatorLocalWeekUtc(
+      new Date("2026-07-27T08:00:00.000Z"),
+      "America/Los_Angeles",
+    ).toISOString(),
+    "2026-07-27T07:00:00.000Z",
   );
 });
 

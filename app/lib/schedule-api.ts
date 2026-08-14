@@ -10,8 +10,11 @@ import {
   scheduleSettingsFromRow,
   type ScheduleSettings,
 } from "./schedule-settings";
-import { runSchedulePass } from "./scheduling-repository";
-import { normalizeCreatorTimezone } from "./timezone";
+import {
+  ensureScheduleForCreator,
+  runSchedulePass,
+} from "./scheduling-repository";
+import { normalizeCreatorTimezone, resolveCreatorTimezone } from "./timezone";
 
 type ScheduleApiOptions = {
   prismaClient?: PrismaClient;
@@ -27,17 +30,25 @@ export async function handleGetSchedule(
   }
 
   const db = options.prismaClient ?? prisma;
-  const schedule = await db.schedule.findUnique({
-    where: {
-      creatorId: session.creatorId,
-    },
-    select: scheduleSettingsSelect,
-  });
+  const [schedule, creator] = await Promise.all([
+    ensureScheduleForCreator(session.creatorId, {
+      prismaClient: db,
+    }),
+    db.creator.findUniqueOrThrow({
+      where: {
+        id: session.creatorId,
+      },
+      select: {
+        timezone: true,
+      },
+    }),
+  ]);
 
   return json(
     {
-      schedule: scheduleSettingsFromRow(schedule),
+      schedule,
       defaults: DEFAULT_SCHEDULE_SETTINGS,
+      timezone: resolveCreatorTimezone(creator.timezone),
     },
     200,
   );
@@ -54,9 +65,11 @@ export async function handlePutSchedule(
 
   let payload: unknown;
   let settings: ScheduleSettings;
+  let timezone: string | null;
   try {
     payload = await request.json();
     settings = parseScheduleSettingsPayload(payload);
+    timezone = parseConfirmedTimezone(payload);
   } catch (error) {
     if (
       error instanceof SyntaxError ||
@@ -69,7 +82,6 @@ export async function handlePutSchedule(
   }
 
   const db = options.prismaClient ?? prisma;
-  const timezone = normalizeCreatorTimezone(readOptionalStringField(payload, "timezone"));
   if (timezone) {
     await db.creator.update({
       where: {
@@ -101,14 +113,40 @@ export async function handlePutSchedule(
   const schedulePass = await runSchedulePass(session.creatorId, new Date(), {
     prismaClient: db,
   });
+  const creator = await db.creator.findUniqueOrThrow({
+    where: {
+      id: session.creatorId,
+    },
+    select: {
+      timezone: true,
+    },
+  });
 
   return json(
     {
       schedule: scheduleSettingsFromRow(schedule),
+      timezone: resolveCreatorTimezone(creator.timezone),
       scheduledCount: schedulePass.scheduled.length,
     },
     200,
   );
+}
+
+function parseConfirmedTimezone(payload: unknown): string | null {
+  if (!isRecord(payload) || payload.timezoneConfirmed !== true) {
+    return null;
+  }
+
+  const timezone = normalizeCreatorTimezone(
+    readOptionalStringField(payload, "timezone"),
+  );
+  if (!timezone) {
+    throw new ScheduleSettingsValidationError(
+      "Timezone must be a valid IANA timezone.",
+    );
+  }
+
+  return timezone;
 }
 
 async function loadCreatorSession(

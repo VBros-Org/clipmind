@@ -1,14 +1,11 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
-import { prisma } from "../../../lib/db";
+import { loginCreatorWithAccessCode } from "../../../lib/login";
 import {
   CREATOR_ACCESS_COOKIE,
   CREATOR_ACCESS_COOKIE_MAX_AGE_SECONDS,
-  loadCreatorSessionForAccessCode,
-  normalizeAccessCode,
 } from "../../../lib/review-auth";
-import { normalizeCreatorTimezone } from "../../../lib/timezone";
 import { TimezoneInput } from "../TimezoneInput";
 
 import styles from "./login.module.css";
@@ -54,22 +51,11 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 async function loginCreator(formData: FormData) {
   "use server";
 
-  const accessCode = normalizeAccessCode(String(formData.get("accessCode") ?? ""));
-  const session = await loadCreatorSessionForAccessCode(accessCode);
+  const accessCode = String(formData.get("accessCode") ?? "");
+  const timezone = String(formData.get("timezone") ?? "");
+  const session = await loginCreatorWithAccessCode(accessCode, timezone);
   if (!session) {
     redirect("/login?error=1");
-  }
-
-  const timezone = normalizeCreatorTimezone(String(formData.get("timezone") ?? ""));
-  if (timezone) {
-    await prisma.creator.update({
-      where: {
-        id: session.creatorId,
-      },
-      data: {
-        timezone,
-      },
-    });
   }
 
   const cookieStore = await cookies();

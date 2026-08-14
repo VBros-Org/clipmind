@@ -4,14 +4,17 @@ import {
   MAX_SLOTS_PER_DAY,
   MIN_ANCHOR_HOUR,
   MIN_SLOTS_PER_DAY,
+  buildEvenSlotTimes,
   normalizeSlotTimes,
   slotTimeParts,
 } from "./schedule-settings";
-
-export const SCHEDULE_ANCHOR_HOUR_UTC = DEFAULT_ANCHOR_HOUR;
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
+import {
+  addCreatorLocalDays,
+  creatorLocalDateForInstant,
+  creatorLocalDateTimeToUtc,
+  resolveCreatorTimezone,
+  type CreatorLocalDate,
+} from "./timezone";
 export type ClipSchedulingStatus =
   | "candidate"
   | "accepted"
@@ -155,6 +158,7 @@ export function pickNextClip(
 export function computeNextSlot(
   schedule: SchedulingCadence,
   now: Date,
+  timezone?: string | null,
 ): Date {
   assertValidDate(now, "now");
 
@@ -163,58 +167,69 @@ export function computeNextSlot(
     assertValidDate(lastScheduledAt, "lastScheduledAt");
   }
 
-  const slotTimes = normalizeSlotTimes(schedule.slotTimes);
-  if (slotTimes) {
-    return computeNextExplicitSlot(slotTimes, now, lastScheduledAt);
-  }
-
-  validateSlotsPerDay(schedule.slotsPerDay);
-  const anchorHour = schedule.anchorHour ?? DEFAULT_ANCHOR_HOUR;
-  validateAnchorHour(anchorHour);
-
-  const intervalMs = DAY_MS / schedule.slotsPerDay;
-  if (!Number.isInteger(intervalMs)) {
-    throw new Error("slotsPerDay must divide one UTC day into whole milliseconds.");
-  }
-
-  const cursorMs = lastScheduledAt
-    ? Math.max(now.getTime(), lastScheduledAt.getTime() + 1)
-    : now.getTime();
-  const anchorMs = Date.UTC(1970, 0, 1, anchorHour);
-  const slotsSinceAnchor = Math.ceil((cursorMs - anchorMs) / intervalMs);
-
-  return new Date(anchorMs + slotsSinceAnchor * intervalMs);
+  const explicitSlotTimes = normalizeSlotTimes(schedule.slotTimes);
+  const slotTimes = explicitSlotTimes ?? legacySlotTimes(schedule);
+  return computeNextCreatorLocalSlot(
+    slotTimes,
+    now,
+    lastScheduledAt,
+    timezone,
+  );
 }
 
-function computeNextExplicitSlot(
+function computeNextCreatorLocalSlot(
   slotTimes: readonly string[],
   now: Date,
   lastScheduledAt: Date | null,
+  timezone: string | null | undefined,
 ): Date {
+  const normalizedTimezone = resolveCreatorTimezone(timezone);
   const cursorMs = lastScheduledAt
     ? Math.max(now.getTime(), lastScheduledAt.getTime() + 1)
     : now.getTime();
-  const cursor = new Date(cursorMs);
-  const year = cursor.getUTCFullYear();
-  const month = cursor.getUTCMonth();
-  const day = cursor.getUTCDate();
+  const cursorDate = new Date(cursorMs);
+  const cursorLocalDate = creatorLocalDateForInstant(
+    cursorDate,
+    normalizedTimezone,
+  );
 
-  for (const slotTime of slotTimes) {
-    const { hour, minute } = slotTimeParts(slotTime);
-    const slot = new Date(Date.UTC(year, month, day, hour, minute));
-    if (slot.getTime() >= cursorMs) {
-      return slot;
+  for (let dayOffset = 0; dayOffset < 370; dayOffset += 1) {
+    const localDate = addCreatorLocalDays(cursorLocalDate, dayOffset);
+    for (const slotTime of slotTimes) {
+      const slot = slotInstantForLocalDate(
+        localDate,
+        slotTime,
+        normalizedTimezone,
+      );
+      if (slot.getTime() >= cursorMs) {
+        return slot;
+      }
     }
   }
 
-  const firstSlotTime = slotTimes[0];
-  if (!firstSlotTime) {
-    throw new Error("slotTimes must contain at least one time.");
-  }
+  throw new Error("Could not find a future schedule slot.");
+}
 
-  const firstSlot = slotTimeParts(firstSlotTime);
-  return new Date(
-    Date.UTC(year, month, day + 1, firstSlot.hour, firstSlot.minute),
+function legacySlotTimes(schedule: SchedulingCadence): string[] {
+  validateSlotsPerDay(schedule.slotsPerDay);
+  const anchorHour = schedule.anchorHour ?? DEFAULT_ANCHOR_HOUR;
+  validateAnchorHour(anchorHour);
+  return buildEvenSlotTimes(schedule.slotsPerDay, anchorHour);
+}
+
+function slotInstantForLocalDate(
+  localDate: CreatorLocalDate,
+  slotTime: string,
+  timezone: string,
+): Date {
+  const { hour, minute } = slotTimeParts(slotTime);
+  return creatorLocalDateTimeToUtc(
+    {
+      ...localDate,
+      hour,
+      minute,
+    },
+    timezone,
   );
 }
 

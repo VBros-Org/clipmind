@@ -4,7 +4,10 @@ import assert from "node:assert/strict";
 import { prisma } from "../lib/db";
 import { cookieHeaderForAccessCode } from "../lib/review-auth";
 import { handleGetSchedule, handlePutSchedule } from "../lib/schedule-api";
-import type { ScheduleSettings } from "../lib/schedule-settings";
+import {
+  DEFAULT_SCHEDULE_SETTINGS,
+  type ScheduleSettings,
+} from "../lib/schedule-settings";
 
 type ScheduleFixture = {
   creatorAId: string;
@@ -111,25 +114,100 @@ test("schedule API persists rhythm per creator and does not leak across creators
         timezone: true,
       },
     });
-    assert.equal(storedCreator.timezone, "Asia/Bangkok");
+    assert.equal(storedCreator.timezone, null);
 
     const creatorAGet = await handleGetSchedule(
       requestWithCode(fixture.creatorACode),
     );
     assert.equal(creatorAGet.status, 200);
     const creatorABody = (await creatorAGet.json()) as {
-      schedule: ScheduleSettings | null;
+      schedule: ScheduleSettings;
+      timezone: string;
     };
     assert.deepEqual(creatorABody.schedule, validSettings);
+    assert.equal(creatorABody.timezone, "UTC");
 
     const creatorBGet = await handleGetSchedule(
       requestWithCode(fixture.creatorBCode),
     );
     assert.equal(creatorBGet.status, 200);
     const creatorBBody = (await creatorBGet.json()) as {
-      schedule: ScheduleSettings | null;
+      schedule: ScheduleSettings;
+      timezone: string;
     };
-    assert.equal(creatorBBody.schedule, null);
+    assert.deepEqual(creatorBBody.schedule, DEFAULT_SCHEDULE_SETTINGS);
+    assert.equal(creatorBBody.timezone, "UTC");
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("schedule API changes timezone only after explicit confirmation", async () => {
+  const fixture = await createFixture();
+
+  try {
+    await prisma.creator.update({
+      where: {
+        id: fixture.creatorAId,
+      },
+      data: {
+        timezone: "Asia/Bangkok",
+      },
+    });
+
+    const unconfirmed = await handlePutSchedule(
+      requestWithCode(fixture.creatorACode, "PUT", {
+        ...validSettings,
+        timezone: "America/New_York",
+      }),
+    );
+    assert.equal(unconfirmed.status, 200);
+    const unconfirmedBody = (await unconfirmed.json()) as {
+      timezone: string;
+    };
+    assert.equal(unconfirmedBody.timezone, "Asia/Bangkok");
+
+    const afterUnconfirmed = await prisma.creator.findUniqueOrThrow({
+      where: {
+        id: fixture.creatorAId,
+      },
+      select: {
+        timezone: true,
+      },
+    });
+    assert.equal(afterUnconfirmed.timezone, "Asia/Bangkok");
+
+    const invalidConfirmed = await handlePutSchedule(
+      requestWithCode(fixture.creatorACode, "PUT", {
+        ...validSettings,
+        timezone: "Not/AZone",
+        timezoneConfirmed: true,
+      }),
+    );
+    assert.equal(invalidConfirmed.status, 400);
+
+    const confirmed = await handlePutSchedule(
+      requestWithCode(fixture.creatorACode, "PUT", {
+        ...validSettings,
+        timezone: "America/New_York",
+        timezoneConfirmed: true,
+      }),
+    );
+    assert.equal(confirmed.status, 200);
+    const confirmedBody = (await confirmed.json()) as {
+      timezone: string;
+    };
+    assert.equal(confirmedBody.timezone, "America/New_York");
+
+    const afterConfirmed = await prisma.creator.findUniqueOrThrow({
+      where: {
+        id: fixture.creatorAId,
+      },
+      select: {
+        timezone: true,
+      },
+    });
+    assert.equal(afterConfirmed.timezone, "America/New_York");
   } finally {
     await cleanupFixture(fixture);
   }
