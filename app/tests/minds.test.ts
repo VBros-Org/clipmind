@@ -89,6 +89,52 @@ test("createMind uses the real one-click Builder API contract", async () => {
   );
 });
 
+test("disableMind uses the Builder API status patch contract", async () => {
+  const calls: { input: string; init?: RequestInit }[] = [];
+  const fetchImpl: MindsFetchLike = async (input, init) => {
+    calls.push({ input, init });
+    return {
+      ok: true,
+      status: 200,
+      async text() {
+        return "";
+      },
+      async json() {
+        return {
+          mindId: "mind_123",
+          isEnabled: false,
+        };
+      },
+    };
+  };
+
+  const client = createMindsClientFromEnv(
+    { [MINDS_BUILDER_API_KEY_ENV]: "test-key" },
+    fetchImpl,
+    () => recordingMessagingClient(),
+  );
+  assert.ok(client?.disableMind);
+
+  await client.disableMind("mind_123");
+
+  assert.equal(calls.length, 1);
+  assert.equal(
+    calls[0]?.input,
+    `${MINDS_BUILDER_API_BASE_URL}/v1/minds/mind_123`,
+  );
+  assert.equal(calls[0]?.init?.method, "PATCH");
+  assert.deepEqual(calls[0]?.init?.headers, {
+    [MINDS_BUILDER_API_KEY_HEADER]: "test-key",
+    "Content-Type": "application/json",
+  });
+  assert.equal(
+    calls[0]?.init?.body,
+    JSON.stringify({
+      isEnabled: false,
+    }),
+  );
+});
+
 test("addTenets seeds via one client-lib message and verifyTenets uses a second conversation", async () => {
   const messagingClient = recordingMessagingClient(
     "Stored dry reaction style.",

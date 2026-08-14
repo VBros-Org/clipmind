@@ -33,6 +33,7 @@ export interface MindCreationResult {
 
 export interface MindsClient {
   createMind(name: string, stewardEmail: string): Promise<MindCreationResult>;
+  disableMind?(mindId: string): Promise<void>;
   addTenets(
     mindId: string,
     tenets: InitialTenets,
@@ -152,6 +153,23 @@ class BuilderApiMindsClient implements MindsClient {
     );
 
     return { mindId, mindEmail };
+  }
+
+  async disableMind(mindId: string): Promise<void> {
+    const cleanMindId = mindId.trim();
+    if (!cleanMindId) {
+      throw new Error("Mind id is required to disable a Mind.");
+    }
+
+    await this.requestJson<Record<string, unknown>>(
+      `/v1/minds/${encodeURIComponent(cleanMindId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          isEnabled: false,
+        }),
+      },
+    );
   }
 
   async addTenets(

@@ -35,6 +35,7 @@ model Creator {
   videos                      Video[]
   uploadIntents               UploadIntent[]
   clips                       Clip[]
+  channelPullTranscripts      ChannelPullTranscript[]
   schedule                    Schedule?
   pushSubscriptions           PushSubscription[]
   nudgeLogs                   NudgeLog[]
@@ -126,6 +127,22 @@ model Clip {
   postedAt         DateTime?
   feedbackSyncedAt DateTime?
   createdAt        DateTime   @default(now())
+}
+
+model ChannelPullTranscript {
+  id         String   @id @default(cuid())
+  creatorId  String
+  creator    Creator  @relation(fields: [creatorId], references: [id])
+  videoId    String
+  videoUrl   String
+  title      String?
+  durationS  Int?
+  transcript Json
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([creatorId, videoId])
+  @@index([creatorId, createdAt])
 }
 
 model Schedule {

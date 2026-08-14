@@ -17,6 +17,7 @@ import {
 } from "../lib/channelPull";
 import { YT_BLOCKED_CHANNEL_PULL_MESSAGE } from "../lib/channel-pull-status";
 import { cookieHeaderForAccessCode } from "../lib/review-auth";
+import { runFirstVideoOnboardingPipeline } from "../lib/video-onboarding";
 import type { MindsClient } from "../lib/minds";
 import type { InitialTenets } from "../lib/tenets";
 import type { Transcript } from "../lib/transcript";
@@ -449,12 +450,200 @@ test("channel pull status reports expired active leases as failed", () => {
   );
 });
 
+test("parallel channel pull and first-video onboarding create one Mind and share it", async () => {
+  const fixture = await createMindlessFixture();
+  const mindsClient = recordingMindsClient("Stored shared creator voice.");
+  const pipelineCalls: string[] = [];
+  let releaseCreateMind: () => void = () => undefined;
+  const createMindCanFinish = new Promise<void>((resolve) => {
+    releaseCreateMind = resolve;
+  });
+  mindsClient.createMindImpl = async () => {
+    mindsClient.createdMindIds.push("created-shared-mind");
+    await createMindCanFinish;
+    return {
+      mindId: "created-shared-mind",
+      mindEmail: "created-shared-mind@hellominds.ai",
+    };
+  };
+
+  try {
+    const uploadRun = runFirstVideoOnboardingPipeline(fixture.videoId, {
+      prismaClient: prisma,
+      storage: {
+        async presignSourceUrl(sourceKey) {
+          return `https://signed.example/${sourceKey}`;
+        },
+      },
+      async transcribeItem() {
+        return transcript("First upload teaches the creator voice.");
+      },
+      async distillTenets() {
+        return tenets;
+      },
+      mindsClient,
+      adoptionPollMs: 5,
+      async runPipelineImpl(videoId) {
+        pipelineCalls.push(videoId);
+        return {
+          status: "done",
+          videoId,
+          creatorId: fixture.creatorId,
+          clipCount: 0,
+          captionedClipIds: [],
+        };
+      },
+    });
+    const channelRun = pullChannelVoice(fixture.creatorId, {
+      prismaClient: prisma,
+      channelUrl: "@MrBeast",
+      clipServiceClient: fakeClipService(),
+      async distillTenets() {
+        return tenets;
+      },
+      mindsClient,
+      adoptionPollMs: 5,
+      onStageChange(stage) {
+        if (stage === "seeding") {
+          releaseCreateMind();
+        }
+      },
+    });
+
+    const [uploadResult, channelResult] = await Promise.all([
+      uploadRun,
+      channelRun,
+    ]);
+
+    assert.equal(uploadResult.status, "done");
+    assert.equal(channelResult.status, "done");
+    assert.equal(channelResult.mindId, "created-shared-mind");
+    assert.deepEqual(mindsClient.createdMindIds, ["created-shared-mind"]);
+    assert.deepEqual(
+      [...new Set(mindsClient.seededMindIds)],
+      ["created-shared-mind"],
+    );
+    assert.deepEqual(pipelineCalls, [fixture.videoId]);
+
+    const creator = await prisma.creator.findUniqueOrThrow({
+      where: {
+        id: fixture.creatorId,
+      },
+      select: {
+        mindId: true,
+        mindStage: true,
+      },
+    });
+    assert.equal(creator.mindId, "created-shared-mind");
+    assert.equal(creator.mindStage, "ready");
+  } finally {
+    releaseCreateMind();
+    await cleanupFixture(fixture.creatorId);
+  }
+});
+
+test("channel pull persists partial transcripts and retry skips finished videos", async () => {
+  const fixture = await createFixture({
+    markerSuffix: "partial-retry",
+  });
+  const firstRunTranscribes: string[] = [];
+  const retryTranscribes: string[] = [];
+
+  try {
+    const firstResult = await pullChannelVoice(fixture.creatorId, {
+      prismaClient: prisma,
+      channelUrl: "@MrBeast",
+      clipServiceClient: fakeClipService({
+        async transcribeRemote(videoUrl) {
+          const videoId = new URL(videoUrl).searchParams.get("v") ?? "";
+          firstRunTranscribes.push(videoId);
+          if (videoId === "video-3") {
+            throw new Error("third transcript failed");
+          }
+
+          return transcript(`stored transcript for ${videoId}`);
+        },
+      }),
+      async distillTenets() {
+        throw new Error("first run should fail before distilling");
+      },
+      mindsClient: recordingMindsClient("unused"),
+    });
+
+    assert.equal(firstResult.status, "failed");
+    assert.equal(firstResult.failedStage, "transcribing_3");
+    assert.deepEqual(firstRunTranscribes, ["video-1", "video-2", "video-3"]);
+
+    const storedAfterFailure = await prisma.channelPullTranscript.findMany({
+      where: {
+        creatorId: fixture.creatorId,
+      },
+      orderBy: {
+        videoId: "asc",
+      },
+      select: {
+        videoId: true,
+      },
+    });
+    assert.deepEqual(
+      storedAfterFailure.map((item) => item.videoId),
+      ["video-1", "video-2"],
+    );
+
+    const retryResult = await pullChannelVoice(fixture.creatorId, {
+      prismaClient: prisma,
+      channelUrl: "@MrBeast",
+      clipServiceClient: fakeClipService({
+        async transcribeRemote(videoUrl) {
+          const videoId = new URL(videoUrl).searchParams.get("v") ?? "";
+          retryTranscribes.push(videoId);
+          return transcript(`retry transcript for ${videoId}`);
+        },
+      }),
+      async distillTenets(transcripts) {
+        assert.deepEqual(new Set(transcripts.map((item) => item.source)), new Set([
+          `clip:${fixture.clipId}`,
+          "youtube:video-1",
+          "youtube:video-2",
+          "youtube:video-3",
+        ]));
+        const transcriptBySource = new Map(
+          transcripts.map((item) => [item.source, item.transcript.text]),
+        );
+        assert.equal(
+          transcriptBySource.get("youtube:video-1"),
+          "stored transcript for video-1",
+        );
+        assert.equal(
+          transcriptBySource.get("youtube:video-2"),
+          "stored transcript for video-2",
+        );
+        assert.equal(
+          transcriptBySource.get("youtube:video-3"),
+          "retry transcript for video-3",
+        );
+        return tenets;
+      },
+      mindsClient: recordingMindsClient("Stored."),
+    });
+
+    assert.equal(retryResult.status, "done");
+    assert.equal(retryResult.transcriptCount, 3);
+    assert.deepEqual(retryTranscribes, ["video-3"]);
+  } finally {
+    await cleanupFixture(fixture.creatorId);
+  }
+});
+
 type ChannelPullFixture = {
   creatorId: string;
   mindId: string;
   accessCode: string;
   captionCorpus: string;
   firstVideoTranscript: string;
+  clipId: string;
+  videoId: string;
+  sourceKey: string;
 };
 
 async function createFixture(
@@ -494,7 +683,10 @@ async function createFixture(
       id: true,
     },
   });
-  await prisma.clip.create({
+  const clip = await prisma.clip.create({
+    select: {
+      id: true,
+    },
     data: {
       creatorId: creator.id,
       videoId: video.id,
@@ -511,10 +703,56 @@ async function createFixture(
     accessCode: creator.accessCode ?? "",
     captionCorpus,
     firstVideoTranscript,
+    clipId: clip.id,
+    videoId: video.id,
+    sourceKey: `videos/${marker}/source.mp4`,
+  };
+}
+
+async function createMindlessFixture(): Promise<ChannelPullFixture> {
+  const fixture = await createFixture({
+    markerSuffix: "parallel",
+  });
+  const sourceKey = `videos/${fixture.creatorId}/first-source.mp4`;
+  await prisma.creator.update({
+    where: {
+      id: fixture.creatorId,
+    },
+    data: {
+      mindId: null,
+      mindStage: "pending",
+      mindRunId: null,
+      mindLeaseHeartbeatAt: null,
+      mindError: null,
+    },
+  });
+  const video = await prisma.video.create({
+    data: {
+      creatorId: fixture.creatorId,
+      sourceKey,
+      contentKey: `${fixture.creatorId}-first-video`,
+      status: "uploaded",
+      pipelineStage: "uploaded",
+    },
+    select: {
+      id: true,
+    },
+  });
+
+  return {
+    ...fixture,
+    mindId: "",
+    videoId: video.id,
+    sourceKey,
   };
 }
 
 async function cleanupFixture(creatorId: string): Promise<void> {
+  await prisma.channelPullTranscript.deleteMany({
+    where: {
+      creatorId,
+    },
+  });
   await prisma.learningEvent.deleteMany({
     where: {
       creatorId,
@@ -571,12 +809,22 @@ function recordingMindsClient(
 ) {
   const state = {
     addOptions: null as { alias?: string; action?: string } | null,
+    createdMindIds: [] as string[],
+    seededMindIds: [] as string[],
+    createMindImpl: null as
+      | null
+      | ((name: string) => Promise<{ mindId: string; mindEmail: string }>),
   };
 
   return Object.assign(state, {
     async createMind(name: string) {
+      if (state.createMindImpl) {
+        return state.createMindImpl(name);
+      }
+      const mindId = `created-${name}`;
+      state.createdMindIds.push(mindId);
       return {
-        mindId: `created-${name}`,
+        mindId,
         mindEmail: "created@hellominds.ai",
       };
     },
@@ -588,6 +836,7 @@ function recordingMindsClient(
       if (options.addTenetsError) {
         throw options.addTenetsError;
       }
+      state.seededMindIds.push(_mindId);
       state.addOptions = addOptions ?? null;
       return confirmation;
     },

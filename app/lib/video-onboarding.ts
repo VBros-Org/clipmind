@@ -8,8 +8,11 @@ import {
   type MindsClient,
 } from "./minds";
 import {
-  DEFAULT_CREATOR_STEWARD_EMAIL,
-  createCreatorMind,
+  claimCreatorMindLease,
+  ensureCreatorMind,
+  type CreatorMindLeaseClaim,
+} from "./mind-provisioning";
+import {
   distillCorpusTenets,
   seedCreatorTenets,
   transcribeCorpusItems,
@@ -76,6 +79,8 @@ export type FirstVideoOnboardingOptions = {
   pipelineOptions?: Omit<PipelineOptions, "prismaClient">;
   now?: Date;
   heartbeatIntervalMs?: number;
+  adoptionPollMs?: number;
+  maxAdoptionWaitMs?: number;
   onMindStageChange?: (stage: CreatorMindStage) => void | Promise<void>;
 };
 
@@ -174,7 +179,10 @@ export async function runFirstVideoOnboardingPipeline(
   let activeStage = resolveMindStartStage(video.creator);
   let mindId = video.creator.mindId?.trim() || null;
   let tenets: InitialTenets | null = null;
-  await claimMindOnboardingRun(db, video.creatorId, runId, options);
+  const claim = await claimMindOnboardingRun(db, video.creatorId, runId, options);
+  if (claim.status === "adopted") {
+    return runNormalPipeline(video.id, db, options);
+  }
 
   try {
     if (shouldRunMindStage(activeStage, "learning_voice")) {
@@ -207,30 +215,21 @@ export async function runFirstVideoOnboardingPipeline(
       await setCreatorMindStage(db, video.creatorId, runId, activeStage, options);
       if (!mindId) {
         const mindsClient = requireMindsClient(options.mindsClient);
-        const mind = await withWorkflowHeartbeat(
-          () => heartbeatMindOnboardingRun(db, video.creatorId, runId, options),
-          () =>
-            createCreatorMind({
-              creatorId: video.creatorId,
-              stewardEmail: options.stewardEmail ?? DEFAULT_CREATOR_STEWARD_EMAIL,
-              mindsClient,
-            }),
-          options.heartbeatIntervalMs,
-        );
-        mindId = mind.mindId;
-        const mindStored = await db.creator.updateMany({
-          where: {
-            id: video.creatorId,
-            mindRunId: runId,
-          },
-          data: {
-            mindId,
-            mindLeaseHeartbeatAt: options.now ?? new Date(),
-          },
+        const mind = await ensureCreatorMind({
+          db,
+          creatorId: video.creatorId,
+          runId,
+          workflowName: "Mind onboarding",
+          mindsClient,
+          stewardEmail: options.stewardEmail,
+          now: options.now,
+          heartbeatIntervalMs: options.heartbeatIntervalMs,
+          adoptionPollMs: options.adoptionPollMs,
+          maxAdoptionWaitMs: options.maxAdoptionWaitMs,
+          heartbeat: () =>
+            heartbeatMindOnboardingRun(db, video.creatorId, runId, options),
         });
-        if (mindStored.count !== 1) {
-          throw new WorkflowLeaseLostError("Mind onboarding", video.creatorId);
-        }
+        mindId = mind.mindId;
       }
     }
 
@@ -377,15 +376,16 @@ async function claimMindOnboardingRun(
   creatorId: string,
   runId: string,
   options: FirstVideoOnboardingOptions,
-): Promise<void> {
-  await db.creator.update({
-    where: {
-      id: creatorId,
-    },
-    data: {
-      mindRunId: runId,
-      mindLeaseHeartbeatAt: options.now ?? new Date(),
-    },
+): Promise<CreatorMindLeaseClaim> {
+  return claimCreatorMindLease({
+    db,
+    creatorId,
+    runId,
+    workflowName: "Mind onboarding",
+    now: options.now,
+    adoptionPollMs: options.adoptionPollMs,
+    maxAdoptionWaitMs: options.maxAdoptionWaitMs,
+    adoptReadyMindOnly: true,
   });
 }
 
