@@ -52,7 +52,7 @@ test("reject undo timer commits when the window lapses", () => {
   assert.equal(undo.snapshot("clip-2"), null);
 });
 
-test("reject undo timer commits pending rejects on background or navigation", () => {
+test("reject undo timer commits pending rejects on explicit commit", () => {
   const timers = fakeTimers();
   const commits: { clipId: string; cause: RejectUndoCommitCause }[] = [];
   const undo = new RejectUndoTimer({
@@ -77,12 +77,56 @@ test("reject undo timer commits pending rejects on background or navigation", ()
   ]);
 });
 
+test("reject undo timer pauses and resumes without spending hidden time", () => {
+  const timers = fakeTimers();
+  const commits: { clipId: string; cause: RejectUndoCommitCause }[] = [];
+  const undo = new RejectUndoTimer({
+    windowMs: 6_000,
+    now: timers.now,
+    setTimeoutImpl: timers.setTimeout,
+    clearTimeoutImpl: timers.clearTimeout,
+    commit(clipId, cause) {
+      commits.push({ clipId, cause });
+    },
+  });
+
+  undo.start("clip-5");
+  timers.advance(2_500);
+  assert.deepEqual(undo.pauseAll(), [
+    {
+      clipId: "clip-5",
+      deadlineMs: 6_000,
+      remainingMs: 3_500,
+    },
+  ]);
+
+  timers.advance(60_000);
+  timers.runAll();
+  assert.deepEqual(commits, []);
+
+  assert.deepEqual(undo.resumeAll(), [
+    {
+      clipId: "clip-5",
+      deadlineMs: 66_000,
+      remainingMs: 3_500,
+    },
+  ]);
+  timers.advance(3_499);
+  timers.runAll();
+  assert.deepEqual(commits, []);
+
+  timers.advance(1);
+  timers.runAll();
+  assert.deepEqual(commits, [{ clipId: "clip-5", cause: "timer" }]);
+});
+
 function fakeTimers() {
   let nowMs = 0;
   let nextId = 1;
   const timers: {
     id: number;
     handler: () => void;
+    dueAt: number;
     cleared: boolean;
   }[] = [];
 
@@ -93,12 +137,13 @@ function fakeTimers() {
     advance(ms: number) {
       nowMs += ms;
     },
-    setTimeout(handler: () => void) {
+    setTimeout(handler: () => void, timeoutMs: number) {
       const id = nextId;
       nextId += 1;
       timers.push({
         id,
         handler,
+        dueAt: nowMs + timeoutMs,
         cleared: false,
       });
       return id;
@@ -110,14 +155,16 @@ function fakeTimers() {
       }
     },
     runNext() {
-      const timer = timers.find((item) => !item.cleared);
+      const timer = timers.find((item) => !item.cleared && item.dueAt <= nowMs);
       if (timer) {
         timer.cleared = true;
         timer.handler();
       }
     },
     runAll() {
-      for (const timer of timers.filter((item) => !item.cleared)) {
+      for (const timer of timers.filter(
+        (item) => !item.cleared && item.dueAt <= nowMs,
+      )) {
         timer.cleared = true;
         timer.handler();
       }

@@ -435,6 +435,40 @@
   object-fit: contain;
 }
 
+.previewControls {
+  display: grid;
+  width: 100%;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--cm-space-2);
+  align-items: center;
+  background: color-mix(in srgb, var(--cm-bg-deep) 82%, var(--cm-surface));
+  padding: var(--cm-space-2);
+}
+
+.previewPlayButton {
+  min-height: var(--cm-touch-target);
+  border: var(--cm-border-width) solid var(--cm-border);
+  border-radius: var(--cm-radius-action);
+  background: var(--cm-surface);
+  color: var(--cm-text);
+  cursor: pointer;
+  font-size: var(--cm-font-secondary);
+  font-weight: 900;
+  padding-inline: var(--cm-space-3);
+}
+
+.previewRange {
+  width: 100%;
+  accent-color: var(--cm-accent);
+}
+
+.previewTime {
+  color: var(--cm-text-muted);
+  font-size: var(--cm-font-label);
+  font-weight: 900;
+  white-space: nowrap;
+}
+
 .playerFallback {
   margin: 0;
   color: var(--cm-text-muted);
@@ -525,6 +559,20 @@
   font-size: var(--cm-font-secondary);
   line-height: var(--cm-line-body);
   white-space: pre-wrap;
+}
+
+.copyFallbackText {
+  width: 100%;
+  min-height: calc(var(--cm-space-6) * 2);
+  margin-block-start: var(--cm-space-2);
+  border: var(--cm-border-width) solid var(--cm-border-strong);
+  border-radius: var(--cm-radius-action);
+  background: var(--cm-bg-deep);
+  color: var(--cm-text);
+  font: inherit;
+  line-height: var(--cm-line-body);
+  padding: var(--cm-space-2);
+  resize: vertical;
 }
 
 .copyButton {

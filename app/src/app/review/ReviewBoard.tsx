@@ -5,6 +5,13 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import {
+  clipWindowDurationSeconds,
+  clipWindowOffsetSeconds,
+  clipWindowStartSeconds,
+  clipWindowTimeFromOffsetSeconds,
+  shouldSeekPreviewToStart,
+} from "../../../lib/clip-preview-window";
+import {
   REJECT_REASONS,
   type RejectReason,
 } from "../../../lib/reject-reasons";
@@ -14,6 +21,7 @@ import {
   type RejectUndoCommitCause,
   type RejectUndoSnapshot,
 } from "../../../lib/reject-undo";
+import { formatScheduledForLabel } from "../../../lib/schedule-label";
 import { deleteVideo } from "../../../lib/video-delete-client";
 import {
   VideoDeleteSheet,
@@ -43,6 +51,7 @@ export type ReviewClipView = {
   renderError: string | null;
   thumbUrl: string | null;
   postCopyVariants: PostCopyVariants | null;
+  scheduledFor: string | null;
   transcript: string | null;
   mindRank: number | null;
   mindRankReason: string | null;
@@ -81,6 +90,8 @@ const PLATFORMS: { id: Platform; label: string }[] = [
   { id: "instagram", label: "Instagram" },
 ];
 
+const REJECT_REASON_WINDOW_MS = 8_000;
+
 export function ReviewBoard({ groups: initialGroups, initialClipId }: ReviewBoardProps) {
   const router = useRouter();
   const [groups, setGroups] = useState(initialGroups);
@@ -97,16 +108,42 @@ export function ReviewBoard({ groups: initialGroups, initialClipId }: ReviewBoar
   const [reasonSavingClipId, setReasonSavingClipId] = useState<string | null>(null);
   const didReadInitialClip = useRef(false);
   const rejectUndoTimer = useRef<RejectUndoTimer | null>(null);
+  const rejectReasonTimer = useRef<RejectUndoTimer | null>(null);
   const commitRejectRef = useRef<
     (clipId: string, cause: RejectUndoCommitCause) => void
   >(() => {});
   const mountedRef = useRef(false);
-  const reasonPromptTimers = useRef<Map<string, number>>(new Map());
   const clipCount = groups.reduce((total, group) => total + group.clips.length, 0);
 
   commitRejectRef.current = (clipId, cause) => {
     void commitDeferredReject(clipId, cause);
   };
+
+  function syncPendingRejectsFromTimer(timer: RejectUndoTimer) {
+    setPendingRejects((current) => {
+      const next = Object.fromEntries(
+        timer.snapshots().map((snapshot) => [snapshot.clipId, snapshot]),
+      );
+
+      return sameSnapshotMap(current, next) ? current : next;
+    });
+  }
+
+  function syncRejectReasonsFromTimer(timer: RejectUndoTimer) {
+    setRejectReasonPrompts((current) => {
+      const next = Object.fromEntries(
+        timer.snapshots().map((snapshot) => [
+          snapshot.clipId,
+          {
+            clipId: snapshot.clipId,
+            deadlineMs: snapshot.deadlineMs,
+          },
+        ]),
+      );
+
+      return sameReasonPromptMap(current, next) ? current : next;
+    });
+  }
 
   useEffect(() => {
     mountedRef.current = true;
@@ -118,34 +155,57 @@ export function ReviewBoard({ groups: initialGroups, initialClipId }: ReviewBoar
         window.setTimeout(handler, timeoutMs),
       clearTimeoutImpl: (handle) => window.clearTimeout(handle as number),
     });
+    const reasonTimer = new RejectUndoTimer({
+      commit(clipId) {
+        if (mountedRef.current) {
+          setRejectReasonPrompts((current) => withoutKey(current, clipId));
+        }
+      },
+      windowMs: REJECT_REASON_WINDOW_MS,
+      setTimeoutImpl: (handler, timeoutMs) =>
+        window.setTimeout(handler, timeoutMs),
+      clearTimeoutImpl: (handle) => window.clearTimeout(handle as number),
+    });
     rejectUndoTimer.current = timer;
+    rejectReasonTimer.current = reasonTimer;
 
-    const commitForVisibility = () => {
+    const handleVisibilityChange = () => {
       if (document.visibilityState === "hidden") {
-        timer.commitAll("background");
+        timer.pauseAll();
+        reasonTimer.pauseAll();
+        syncPendingRejectsFromTimer(timer);
+        syncRejectReasonsFromTimer(reasonTimer);
+      } else {
+        timer.resumeAll();
+        reasonTimer.resumeAll();
+        syncPendingRejectsFromTimer(timer);
+        syncRejectReasonsFromTimer(reasonTimer);
+        router.refresh();
       }
     };
     const commitForNavigation = () => {
       timer.commitAll("navigation");
+      reasonTimer.clearAll();
+    };
+    const refreshOnFocus = () => {
+      router.refresh();
     };
 
-    document.addEventListener("visibilitychange", commitForVisibility);
-    window.addEventListener("pagehide", commitForNavigation);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", refreshOnFocus);
     window.addEventListener("beforeunload", commitForNavigation);
 
     return () => {
       mountedRef.current = false;
       timer.commitAll("navigation");
+      reasonTimer.clearAll();
       rejectUndoTimer.current = null;
-      document.removeEventListener("visibilitychange", commitForVisibility);
-      window.removeEventListener("pagehide", commitForNavigation);
+      rejectReasonTimer.current = null;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", refreshOnFocus);
       window.removeEventListener("beforeunload", commitForNavigation);
-      for (const timeout of reasonPromptTimers.current.values()) {
-        window.clearTimeout(timeout);
-      }
-      reasonPromptTimers.current.clear();
     };
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     if (Object.keys(pendingRejects).length === 0) {
@@ -289,7 +349,8 @@ export function ReviewBoard({ groups: initialGroups, initialClipId }: ReviewBoar
 
   function showRejectReasons(clipId: string) {
     dismissRejectReasons(clipId);
-    const deadlineMs = Date.now() + 8_000;
+    const snapshot = rejectReasonTimer.current?.start(clipId);
+    const deadlineMs = snapshot?.deadlineMs ?? Date.now() + REJECT_REASON_WINDOW_MS;
     setRejectReasonPrompts((current) => ({
       ...current,
       [clipId]: {
@@ -297,20 +358,10 @@ export function ReviewBoard({ groups: initialGroups, initialClipId }: ReviewBoar
         deadlineMs,
       },
     }));
-    reasonPromptTimers.current.set(
-      clipId,
-      window.setTimeout(() => {
-        dismissRejectReasons(clipId);
-      }, 8_000),
-    );
   }
 
   function dismissRejectReasons(clipId: string) {
-    const timeout = reasonPromptTimers.current.get(clipId);
-    if (timeout !== undefined) {
-      window.clearTimeout(timeout);
-      reasonPromptTimers.current.delete(clipId);
-    }
+    rejectReasonTimer.current?.undo(clipId);
     setRejectReasonPrompts((current) => withoutKey(current, clipId));
   }
 
@@ -588,21 +639,29 @@ function ReviewSheet({
   );
   const [isRetryingRender, setIsRetryingRender] = useState(false);
   const [copyState, setCopyState] = useState<Platform | null>(null);
+  const [copyFallbackPlatform, setCopyFallbackPlatform] =
+    useState<Platform | null>(null);
   const [preview, setPreview] = useState<PreviewPayload | null>(null);
+  const [previewOffsetSeconds, setPreviewOffsetSeconds] = useState(0);
+  const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
   const [previewFailed, setPreviewFailed] = useState(false);
   const [learningNote, setLearningNote] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canReview = clip.status === "candidate";
   const videoSource = clip.renderedUrl ?? preview?.previewUrl ?? null;
   const isPreview = !clip.renderedUrl && preview !== null;
+  const scheduledLabel = formatScheduledForLabel(clip.scheduledFor);
 
   useEffect(() => {
     setIsRendering(isRenderPending(clip));
     setCopyState(null);
+    setCopyFallbackPlatform(null);
   }, [clip.id, clip.renderFailedAt, clip.renderedUrl, clip.status]);
 
   useEffect(() => {
     setLearningNote(false);
+    setPreviewOffsetSeconds(0);
+    setIsPreviewPlaying(false);
   }, [clip.id]);
 
   useEffect(() => {
@@ -727,16 +786,21 @@ function ReviewSheet({
     }
   }
 
-  function seekToStart() {
+  function seekPreview(options: { firstLoad?: boolean } = {}) {
     const video = videoRef.current;
     if (!video || !isPreview || !preview) {
       return;
     }
 
-    const startSeconds = preview.startMs / 1000;
-    if (Math.abs(video.currentTime - startSeconds) > 0.2) {
+    const startSeconds = clipWindowStartSeconds(preview);
+    if (
+      shouldSeekPreviewToStart(video.currentTime, preview, {
+        firstLoad: options.firstLoad,
+      })
+    ) {
       video.currentTime = startSeconds;
     }
+    setPreviewOffsetSeconds(clipWindowOffsetSeconds(video.currentTime, preview));
   }
 
   function keepPreviewInWindow() {
@@ -747,13 +811,74 @@ function ReviewSheet({
 
     if (video.currentTime >= preview.endMs / 1000) {
       video.pause();
-      video.currentTime = preview.startMs / 1000;
+      video.currentTime = clipWindowStartSeconds(preview);
+      setPreviewOffsetSeconds(0);
+      setIsPreviewPlaying(false);
+      return;
+    }
+
+    if (shouldSeekPreviewToStart(video.currentTime, preview)) {
+      video.currentTime = clipWindowStartSeconds(preview);
+    }
+    setPreviewOffsetSeconds(clipWindowOffsetSeconds(video.currentTime, preview));
+  }
+
+  function handlePreviewPlay() {
+    seekPreview();
+    setIsPreviewPlaying(true);
+  }
+
+  function handlePreviewPause() {
+    if (isPreview) {
+      setIsPreviewPlaying(false);
     }
   }
 
+  function togglePreviewPlayback() {
+    const video = videoRef.current;
+    if (!video || !isPreview || !preview) {
+      return;
+    }
+
+    if (video.paused) {
+      seekPreview();
+      void video.play().catch(() => {
+        setIsPreviewPlaying(false);
+      });
+      return;
+    }
+
+    video.pause();
+  }
+
+  function scrubPreview(nextOffsetSeconds: number) {
+    const video = videoRef.current;
+    if (!video || !isPreview || !preview) {
+      return;
+    }
+
+    const nextTime = clipWindowTimeFromOffsetSeconds(
+      nextOffsetSeconds,
+      preview,
+    );
+    video.currentTime = nextTime;
+    setPreviewOffsetSeconds(clipWindowOffsetSeconds(nextTime, preview));
+  }
+
   async function copyCaption(platform: Platform) {
-    await navigator.clipboard.writeText(clip.postCopyVariants?.[platform] ?? "");
-    setCopyState(platform);
+    const caption = clip.postCopyVariants?.[platform] ?? "";
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("Clipboard unavailable.");
+      }
+
+      await navigator.clipboard.writeText(caption);
+      setCopyState(platform);
+      setCopyFallbackPlatform(null);
+    } catch {
+      setCopyState(null);
+      setCopyFallbackPlatform(platform);
+    }
   }
 
   return (
@@ -783,9 +908,10 @@ function ReviewSheet({
               className={`${styles.player} ${
                 isPreview ? styles.previewPlayer : styles.renderedPlayer
               }`}
-              controls
-              onLoadedMetadata={seekToStart}
-              onPlay={seekToStart}
+              controls={!isPreview}
+              onLoadedMetadata={() => seekPreview({ firstLoad: true })}
+              onPause={handlePreviewPause}
+              onPlay={handlePreviewPlay}
               onTimeUpdate={keepPreviewInWindow}
               playsInline
               preload="metadata"
@@ -799,6 +925,34 @@ function ReviewSheet({
                 : "Loading preview."}
             </p>
           )}
+          {isPreview && preview ? (
+            <div className={styles.previewControls}>
+              <button
+                className={styles.previewPlayButton}
+                onClick={togglePreviewPlayback}
+                type="button"
+              >
+                {isPreviewPlaying ? "Pause" : "Play"}
+              </button>
+              <input
+                aria-label="Preview position"
+                className={styles.previewRange}
+                max={clipWindowDurationSeconds(preview)}
+                min={0}
+                onChange={(event) => scrubPreview(Number(event.currentTarget.value))}
+                step={0.1}
+                type="range"
+                value={Math.min(
+                  previewOffsetSeconds,
+                  clipWindowDurationSeconds(preview),
+                )}
+              />
+              <span className={styles.previewTime}>
+                {formatPreviewTime(previewOffsetSeconds)} /{" "}
+                {formatPreviewTime(clipWindowDurationSeconds(preview))}
+              </span>
+            </div>
+          ) : null}
         </div>
 
         <p className={styles.transcript}>{transcriptLine(clip.transcript)}</p>
@@ -831,6 +985,18 @@ function ReviewSheet({
                   <p className={styles.captionText}>
                     {clip.postCopyVariants?.[platform.id]}
                   </p>
+                  {copyFallbackPlatform === platform.id ? (
+                    <textarea
+                      aria-label={`${platform.label} caption fallback`}
+                      className={styles.copyFallbackText}
+                      data-testid="caption-copy-fallback"
+                      onClick={(event) => event.currentTarget.select()}
+                      onFocus={(event) => event.currentTarget.select()}
+                      readOnly
+                      rows={4}
+                      value={clip.postCopyVariants?.[platform.id] ?? ""}
+                    />
+                  ) : null}
                 </div>
                 <button
                   className={styles.copyButton}
@@ -856,6 +1022,14 @@ function ReviewSheet({
       </div>
 
       <div className={styles.sheetActions}>
+        {scheduledLabel ? (
+          <p
+            className={styles.learningNote}
+            data-testid="review-scheduled-for"
+          >
+            {scheduledLabel}
+          </p>
+        ) : null}
         {learningNote ? (
           <p className={styles.learningNote}>Your Mind will learn from this.</p>
         ) : null}
@@ -1007,6 +1181,30 @@ function sameSnapshotMap(
   );
 }
 
+function sameReasonPromptMap(
+  left: Record<string, RejectReasonPrompt>,
+  right: Record<string, RejectReasonPrompt>,
+): boolean {
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) {
+    return false;
+  }
+
+  return leftKeys.every(
+    (key) =>
+      left[key]?.clipId === right[key]?.clipId &&
+      left[key]?.deadlineMs === right[key]?.deadlineMs,
+  );
+}
+
 function reasonSlug(rejectReason: RejectReason): string {
   return rejectReason.replace(/\s+/g, "-");
+}
+
+function formatPreviewTime(seconds: number): string {
+  const safeSeconds = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainder = safeSeconds % 60;
+  return `${minutes}:${String(remainder).padStart(2, "0")}`;
 }
