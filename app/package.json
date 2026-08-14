@@ -7,6 +7,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "typecheck": "prisma generate && tsc --noEmit",
     "icons:pwa": "node scripts/generate-pwa-icons.mjs",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
@@ -14,13 +15,15 @@
     "onboard:creator": "tsc -p tsconfig.scripts.json && node --env-file=.env dist/scripts/onboard-creator.js",
     "pretest:onboarding": "prisma generate",
     "test:onboarding": "tsc -p tsconfig.scripts.json && node --test dist/tests/clip-service.test.js dist/tests/minds.test.js dist/tests/onboarding.test.js dist/tests/voice-distill.test.js",
+    "test:node": "prisma generate && tsc -p tsconfig.scripts.json && if [ -f .env ]; then node --env-file=.env --test dist/tests/captioning.test.js dist/tests/clip-service.test.js dist/tests/home-rules.test.js dist/tests/minds.test.js dist/tests/onboarding.test.js dist/tests/push-health.test.js dist/tests/pwa.test.js dist/tests/ranking.test.js dist/tests/reject-undo.test.js dist/tests/review-polish.test.js dist/tests/scheduling.test.js dist/tests/screen-wake-lock.test.js dist/tests/session-api.test.js dist/tests/share-prepared-video.test.js dist/tests/storage.test.js dist/tests/tasteFeedback.test.js dist/tests/upload-multipart-client.test.js dist/tests/upload-status-client.test.js dist/tests/upload-transfer-state.test.js dist/tests/video-label.test.js dist/tests/voice-distill.test.js; else node --test dist/tests/captioning.test.js dist/tests/clip-service.test.js dist/tests/home-rules.test.js dist/tests/minds.test.js dist/tests/onboarding.test.js dist/tests/push-health.test.js dist/tests/pwa.test.js dist/tests/ranking.test.js dist/tests/reject-undo.test.js dist/tests/review-polish.test.js dist/tests/scheduling.test.js dist/tests/screen-wake-lock.test.js dist/tests/session-api.test.js dist/tests/share-prepared-video.test.js dist/tests/storage.test.js dist/tests/tasteFeedback.test.js dist/tests/upload-multipart-client.test.js dist/tests/upload-status-client.test.js dist/tests/upload-transfer-state.test.js dist/tests/video-label.test.js dist/tests/voice-distill.test.js; fi",
+    "test:db": "prisma generate && tsc -p tsconfig.scripts.json && if [ -f .env ]; then node --env-file=.env --test dist/tests/channelPull.test.js dist/tests/ingest.test.js dist/tests/login.test.js dist/tests/pipeline.test.js dist/tests/push.test.js dist/tests/reconcile-uploads.test.js dist/tests/render.test.js dist/tests/review-api.test.js dist/tests/schedule-api.test.js dist/tests/scheduling-db.test.js dist/tests/signup-api.test.js dist/tests/signup-page.test.js dist/tests/video-api.test.js dist/tests/video-onboarding.test.js dist/tests/voice-corpus.test.js; else node --test dist/tests/channelPull.test.js dist/tests/ingest.test.js dist/tests/login.test.js dist/tests/pipeline.test.js dist/tests/push.test.js dist/tests/reconcile-uploads.test.js dist/tests/render.test.js dist/tests/review-api.test.js dist/tests/schedule-api.test.js dist/tests/scheduling-db.test.js dist/tests/signup-api.test.js dist/tests/signup-page.test.js dist/tests/video-api.test.js dist/tests/video-onboarding.test.js dist/tests/voice-corpus.test.js; fi",
     "preingest:video": "prisma generate",
     "ingest:video": "tsc -p tsconfig.scripts.json && node --env-file=.env dist/scripts/ingest-video.js",
     "test:ingest": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env dist/tests/ingest.test.js",
     "prerender:clip": "prisma generate",
     "render:clip": "tsc -p tsconfig.scripts.json && node --env-file=.env dist/scripts/render-clip.js",
     "r2:check": "tsc -p tsconfig.scripts.json && node --env-file=.env dist/scripts/check-r2.js",
-    "test:storage": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env --test dist/tests/storage.test.js dist/tests/render.test.js",
+    "test:storage": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env --test dist/tests/storage.test.js dist/tests/render.test.js dist/tests/reconcile-uploads.test.js",
     "preverify:creator": "prisma generate",
     "verify:creator": "tsc -p tsconfig.scripts.json && node --env-file=.env dist/scripts/verify-creator.js",
     "precaption:clip": "prisma generate",
@@ -57,7 +60,10 @@
     "test:push": "tsc -p tsconfig.scripts.json && node --env-file=.env --test dist/tests/push.test.js dist/tests/push-health.test.js",
     "test:review": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env --test dist/tests/review-api.test.js dist/tests/reject-undo.test.js dist/tests/schedule-api.test.js dist/tests/login.test.js",
     "test:pipeline": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env --test dist/tests/pipeline.test.js dist/tests/video-api.test.js",
-    "test:signup": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env --test dist/tests/signup-api.test.js dist/tests/signup-page.test.js dist/tests/video-onboarding.test.js dist/tests/voice-corpus.test.js dist/tests/channelPull.test.js"
+    "test:signup": "prisma generate && tsc -p tsconfig.scripts.json && node --env-file=.env --test dist/tests/signup-api.test.js dist/tests/signup-page.test.js dist/tests/video-onboarding.test.js dist/tests/voice-corpus.test.js dist/tests/channelPull.test.js",
+    "seed:e2e": "if [ -f .env ]; then node --env-file=.env dist/scripts/seed-e2e.js; else node dist/scripts/seed-e2e.js; fi",
+    "pretest:e2e": "prisma generate && tsc -p tsconfig.scripts.json",
+    "test:e2e": "playwright test"
   },
   "engines": {
     "node": ">=22"
@@ -79,6 +85,7 @@
     "@types/node": "^26.1.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
+    "@playwright/test": "1.62.0",
     "prisma": "^6.19.3",
     "typescript": "^6.0.3"
   }

@@ -65,6 +65,7 @@ export async function runPushTickWithAdvisoryLock(
 
       return runPushTick(now, {
         prismaClient: tx,
+        creatorIds: options.creatorIds,
         sendPushNudgeToCreatorImpl: options.sendPushNudgeToCreatorImpl,
       });
     },

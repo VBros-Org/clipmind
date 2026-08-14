@@ -17,7 +17,6 @@ from src.youtube import (
     normalize_youtube_channel_url,
 )
 
-
 AUTH_HEADERS = {"Authorization": "Bearer test-service-token"}
 
 

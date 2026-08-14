@@ -18,29 +18,138 @@ jobs:
           fi
           echo "No .env files committed."
 
+  app-typecheck:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/clipmind_dev
+      CLIP_SERVICE_URL: http://localhost:8000
+      CLIP_SERVICE_TOKEN: ci-test-token
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - name: Full app typecheck
+        run: npm run typecheck
+
+  app-node:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/clipmind_dev
+      CLIP_SERVICE_URL: http://localhost:8000
+      CLIP_SERVICE_TOKEN: ci-test-token
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - name: Pure Node test suites
+        run: npm run test:node
+
+  app-db:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: clipmind_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d clipmind_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: app
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/clipmind_ci
+      CLIPMIND_TEST_DB_OVERRIDE: "1"
+      CLIP_SERVICE_URL: http://localhost:8000
+      CLIP_SERVICE_TOKEN: ci-test-token
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - name: Apply Prisma migrations
+        run: npx prisma migrate deploy
+      - name: DB-backed Node test suites
+        run: npm run test:db
+
+  app-e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: clipmind_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d clipmind_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: app
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/clipmind_ci
+      CLIPMIND_TEST_DB_OVERRIDE: "1"
+      CLIP_SERVICE_URL: http://localhost:8000
+      CLIP_SERVICE_TOKEN: ci-test-token
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
+      - name: Apply Prisma migrations
+        run: npx prisma migrate deploy
+      - name: Playwright seeded app smoke
+        run: npm run test:e2e
+
   clip-service:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clip-service
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Lint (real errors only for now)
+      - name: Install Python dependencies
         run: |
-          pip install ruff
-          # Minimal ruleset: syntax errors + undefined names. Tighten as the code grows.
-          ruff check --select E9,F63,F7,F82 clip-service
-
-  app:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Typecheck (once the app is scaffolded)
-        run: |
-          if [ -f app/package.json ]; then
-            cd app
-            npm ci
-            npx tsc --noEmit
-          else
-            echo "app/package.json not present yet; skipping typecheck."
-          fi
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt ruff
+      - name: Ruff
+        run: ruff check --select E9,F63,F7,F82 src tests
+      - name: Pytest
+        run: pytest

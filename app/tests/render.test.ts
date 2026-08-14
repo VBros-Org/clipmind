@@ -1,3 +1,5 @@
+import "./helpers/db-test-guard";
+
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Readable } from "node:stream";

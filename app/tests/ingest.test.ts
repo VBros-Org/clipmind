@@ -1,3 +1,5 @@
+import "./helpers/db-test-guard";
+
 import assert from "node:assert/strict";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";

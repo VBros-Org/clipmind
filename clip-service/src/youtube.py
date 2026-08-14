@@ -264,7 +264,7 @@ def _duration_seconds(value: Any) -> int | None:
         return None
     if duration < 0:
         return None
-    return int(round(duration))
+    return round(duration)
 
 
 def _downloaded_audio_path(temp_dir: Path, info: dict[str, Any]) -> Path:

@@ -68,7 +68,7 @@ def probe_video_duration_ms(video_path: Path | str) -> int:
     if duration_seconds is None:
         raise RuntimeError("ffprobe did not return a video duration.")
 
-    return max(0, int(round(float(duration_seconds) * 1000)))
+    return max(0, round(float(duration_seconds) * 1000))
 
 
 def extract_audio(video_path: Path, audio_path: Path) -> None:
@@ -192,4 +192,4 @@ def _response_to_dict(response: Any) -> dict[str, Any]:
 def _seconds_to_ms(value: Any) -> int:
     if value is None:
         return 0
-    return max(0, int(round(float(value) * 1000)))
+    return max(0, round(float(value) * 1000))
