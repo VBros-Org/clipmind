@@ -28,6 +28,13 @@ import { createR2Storage, type R2Storage } from "./storage";
 import { parseInitialTenets, type InitialTenets } from "./tenets";
 import type { CorpusItem } from "./clip-service";
 import type { Transcript } from "./transcript";
+import {
+  WorkflowLeaseLostError,
+  incrementStageAttempt,
+  isWorkflowLeaseExpired,
+  newWorkflowRunId,
+  withWorkflowHeartbeat,
+} from "./workflow-lease";
 
 export const MIND_ONBOARDING_STAGES = [
   "learning_voice",
@@ -67,12 +74,15 @@ export type FirstVideoOnboardingOptions = {
     options?: PipelineOptions,
   ) => Promise<PipelineRunResult>;
   pipelineOptions?: Omit<PipelineOptions, "prismaClient">;
+  now?: Date;
+  heartbeatIntervalMs?: number;
   onMindStageChange?: (stage: CreatorMindStage) => void | Promise<void>;
 };
 
 type CreatorMindState = {
   mindId: string | null;
   mindStage: string | null;
+  mindLeaseHeartbeatAt?: Date | null;
 };
 
 export function creatorHasReadyMind(creator: CreatorMindState): boolean {
@@ -103,11 +113,29 @@ export function isMindOnboardingStage(
   return MIND_ONBOARDING_STAGES.includes(value as MindOnboardingStage);
 }
 
+export function canRetryMindOnboardingStage(
+  creator: {
+    mindStage: string | null;
+    mindLeaseHeartbeatAt: Date | null;
+  },
+  now: Date = new Date(),
+): boolean {
+  if (creator.mindStage === "failed") {
+    return true;
+  }
+
+  return (
+    isMindOnboardingStage(creator.mindStage) &&
+    isWorkflowLeaseExpired(creator.mindLeaseHeartbeatAt, now)
+  );
+}
+
 export async function runFirstVideoOnboardingPipeline(
   videoId: string,
   options: FirstVideoOnboardingOptions = {},
 ): Promise<FirstVideoOnboardingResult> {
   const db = options.prismaClient ?? prisma;
+  const runId = newWorkflowRunId("mind-onboarding");
   const video = await db.video.findUnique({
     where: {
       id: videoId,
@@ -122,6 +150,9 @@ export async function runFirstVideoOnboardingPipeline(
           mindId: true,
           mindStage: true,
           mindError: true,
+          mindRunId: true,
+          mindLeaseHeartbeatAt: true,
+          mindStageAttempts: true,
           initialTenets: true,
         },
       },
@@ -131,7 +162,8 @@ export async function runFirstVideoOnboardingPipeline(
   if (!video) {
     throw new Error(`Video ${videoId} does not exist.`);
   }
-  if (!video.sourceKey) {
+  const sourceKey = video.sourceKey;
+  if (!sourceKey) {
     throw new Error(`Video ${videoId} does not have an uploaded source key.`);
   }
 
@@ -141,48 +173,70 @@ export async function runFirstVideoOnboardingPipeline(
 
   let activeStage = resolveMindStartStage(video.creator);
   let mindId = video.creator.mindId?.trim() || null;
-  let tenets = readTenets(video.creator.initialTenets);
+  let tenets: InitialTenets | null = null;
+  await claimMindOnboardingRun(db, video.creatorId, runId, options);
 
   try {
     if (shouldRunMindStage(activeStage, "learning_voice")) {
       activeStage = "learning_voice";
-      await setCreatorMindStage(db, video.creatorId, activeStage, options);
-      tenets = await learnVoiceFromVideo(video.sourceKey, options);
-      await db.creator.update({
+      await setCreatorMindStage(db, video.creatorId, runId, activeStage, options);
+      tenets = await withWorkflowHeartbeat(
+        () => heartbeatMindOnboardingRun(db, video.creatorId, runId, options),
+        () => learnVoiceFromVideo(sourceKey, options),
+        options.heartbeatIntervalMs,
+      );
+      const tenetsStored = await db.creator.updateMany({
         where: {
           id: video.creatorId,
+          mindRunId: runId,
         },
         data: {
           initialTenets: toPrismaJson(tenets),
+          mindLeaseHeartbeatAt: options.now ?? new Date(),
         },
       });
+      if (tenetsStored.count !== 1) {
+        throw new WorkflowLeaseLostError("Mind onboarding", video.creatorId);
+      }
+    } else {
+      tenets = readTenets(video.creator.initialTenets);
     }
 
     if (shouldRunMindStage(activeStage, "waking_mind")) {
       activeStage = "waking_mind";
-      await setCreatorMindStage(db, video.creatorId, activeStage, options);
+      await setCreatorMindStage(db, video.creatorId, runId, activeStage, options);
       if (!mindId) {
         const mindsClient = requireMindsClient(options.mindsClient);
-        const mind = await createCreatorMind({
-          creatorId: video.creatorId,
-          stewardEmail: options.stewardEmail ?? DEFAULT_CREATOR_STEWARD_EMAIL,
-          mindsClient,
-        });
+        const mind = await withWorkflowHeartbeat(
+          () => heartbeatMindOnboardingRun(db, video.creatorId, runId, options),
+          () =>
+            createCreatorMind({
+              creatorId: video.creatorId,
+              stewardEmail: options.stewardEmail ?? DEFAULT_CREATOR_STEWARD_EMAIL,
+              mindsClient,
+            }),
+          options.heartbeatIntervalMs,
+        );
         mindId = mind.mindId;
-        await db.creator.update({
+        const mindStored = await db.creator.updateMany({
           where: {
             id: video.creatorId,
+            mindRunId: runId,
           },
           data: {
             mindId,
+            mindLeaseHeartbeatAt: options.now ?? new Date(),
           },
         });
+        if (mindStored.count !== 1) {
+          throw new WorkflowLeaseLostError("Mind onboarding", video.creatorId);
+        }
       }
     }
 
     if (shouldRunMindStage(activeStage, "teaching_taste")) {
       activeStage = "teaching_taste";
-      await setCreatorMindStage(db, video.creatorId, activeStage, options);
+      await setCreatorMindStage(db, video.creatorId, runId, activeStage, options);
       const mindsClient = requireMindsClient(options.mindsClient);
       if (!mindId) {
         throw new Error("Creator Mind id was missing before Tenet seeding.");
@@ -190,18 +244,29 @@ export async function runFirstVideoOnboardingPipeline(
       if (!tenets) {
         throw new Error("Initial Tenets were missing before Tenet seeding.");
       }
+      const seededMindId = mindId;
+      const seededTenets = tenets;
 
-      await seedCreatorTenets(mindsClient, mindId, tenets);
-      await db.creator.update({
+      await withWorkflowHeartbeat(
+        () => heartbeatMindOnboardingRun(db, video.creatorId, runId, options),
+        () => seedCreatorTenets(mindsClient, seededMindId, seededTenets),
+        options.heartbeatIntervalMs,
+      );
+      const completed = await db.creator.updateMany({
         where: {
           id: video.creatorId,
+          mindRunId: runId,
         },
         data: {
-          initialTenets: toPrismaJson(tenets),
+          initialTenets: toPrismaJson(seededTenets),
           mindStage: "ready",
           mindError: null,
+          mindLeaseHeartbeatAt: options.now ?? new Date(),
         },
       });
+      if (completed.count !== 1) {
+        throw new WorkflowLeaseLostError("Mind onboarding", video.creatorId);
+      }
       await options.onMindStageChange?.("ready");
     }
 
@@ -209,15 +274,7 @@ export async function runFirstVideoOnboardingPipeline(
   } catch (error) {
     const failedStage = activeStage;
     const errorText = `${failedStage}: ${shortErrorMessage(error)}`;
-    await db.creator.update({
-      where: {
-        id: video.creatorId,
-      },
-      data: {
-        mindStage: "failed",
-        mindError: errorText,
-      },
-    });
+    await markMindOnboardingFailed(db, video.creatorId, runId, errorText, options);
     await options.onMindStageChange?.("failed");
 
     return {
@@ -270,6 +327,8 @@ async function runNormalPipeline(
 ): Promise<PipelineRunResult> {
   const pipeline = options.runPipelineImpl ?? runPipeline;
   return pipeline(videoId, {
+    now: options.now,
+    heartbeatIntervalMs: options.heartbeatIntervalMs,
     ...options.pipelineOptions,
     prismaClient: db,
   });
@@ -278,7 +337,45 @@ async function runNormalPipeline(
 async function setCreatorMindStage(
   db: PrismaClient,
   creatorId: string,
+  runId: string,
   stage: MindOnboardingStage,
+  options: FirstVideoOnboardingOptions,
+): Promise<void> {
+  const creator = await db.creator.findUniqueOrThrow({
+    where: {
+      id: creatorId,
+    },
+    select: {
+      mindRunId: true,
+      mindStageAttempts: true,
+    },
+  });
+  if (creator.mindRunId !== runId) {
+    throw new WorkflowLeaseLostError("Mind onboarding", creatorId);
+  }
+
+  const updated = await db.creator.updateMany({
+    where: {
+      id: creatorId,
+      mindRunId: runId,
+    },
+    data: {
+      mindStage: stage,
+      mindError: null,
+      mindLeaseHeartbeatAt: options.now ?? new Date(),
+      mindStageAttempts: incrementStageAttempt(creator.mindStageAttempts, stage),
+    },
+  });
+  if (updated.count !== 1) {
+    throw new WorkflowLeaseLostError("Mind onboarding", creatorId);
+  }
+  await options.onMindStageChange?.(stage);
+}
+
+async function claimMindOnboardingRun(
+  db: PrismaClient,
+  creatorId: string,
+  runId: string,
   options: FirstVideoOnboardingOptions,
 ): Promise<void> {
   await db.creator.update({
@@ -286,11 +383,53 @@ async function setCreatorMindStage(
       id: creatorId,
     },
     data: {
-      mindStage: stage,
-      mindError: null,
+      mindRunId: runId,
+      mindLeaseHeartbeatAt: options.now ?? new Date(),
     },
   });
-  await options.onMindStageChange?.(stage);
+}
+
+async function heartbeatMindOnboardingRun(
+  db: PrismaClient,
+  creatorId: string,
+  runId: string,
+  options: FirstVideoOnboardingOptions,
+): Promise<void> {
+  const updated = await db.creator.updateMany({
+    where: {
+      id: creatorId,
+      mindRunId: runId,
+    },
+    data: {
+      mindLeaseHeartbeatAt: options.now ?? new Date(),
+    },
+  });
+  if (updated.count !== 1) {
+    throw new WorkflowLeaseLostError("Mind onboarding", creatorId);
+  }
+}
+
+async function markMindOnboardingFailed(
+  db: PrismaClient,
+  creatorId: string,
+  runId: string,
+  errorText: string,
+  options: FirstVideoOnboardingOptions,
+): Promise<void> {
+  const updated = await db.creator.updateMany({
+    where: {
+      id: creatorId,
+      mindRunId: runId,
+    },
+    data: {
+      mindStage: "failed",
+      mindError: errorText,
+      mindLeaseHeartbeatAt: options.now ?? new Date(),
+    },
+  });
+  if (updated.count !== 1) {
+    throw new WorkflowLeaseLostError("Mind onboarding", creatorId);
+  }
 }
 
 function resolveMindStartStage(creator: {

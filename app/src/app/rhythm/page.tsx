@@ -53,6 +53,9 @@ export default async function RhythmPage({ searchParams }: RhythmPageProps) {
           initialChannelPullStatus={channelPullStatusResponse(
             overview.creator.channelPullStage,
             overview.creator.channelPullError,
+            {
+              leaseHeartbeatAt: overview.creator.channelPullLeaseHeartbeatAt,
+            },
           )}
           initialChannelUrl={overview.creator.channelUrl ?? ""}
         />

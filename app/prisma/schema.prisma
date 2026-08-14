@@ -11,27 +11,33 @@ datasource db {
 }
 
 model Creator {
-  id                String             @id @default(cuid())
-  accessCode        String?            @unique
-  displayName       String?
-  channelUrl        String?
-  mindId            String? // the creator's Minds agent (voice + clip-taste Tenets)
-  mindStage         String? // pending | learning_voice | waking_mind | teaching_taste | ready | failed
-  mindError         String? // Short named-step Mind onboarding failure message. Never stores stack traces.
-  initialTenets     Json? // distilled creator voice + clip-taste Tenets from onboarding
-  captionCorpus     String? // creator-pasted recent post-copy captions, one per line
-  channelPullStage  String? // listing | transcribing_1..3 | distilling | seeding | done | failed
-  channelPullError  String? // Short named-step channel pull failure message. Never stores stack traces.
-  captionStyle      Json? // burned-in subtitle preset: font, size, position, colour, highlight
-  timezone          String? // IANA timezone captured client-side for creator-local copy
-  createdAt         DateTime           @default(now())
-  inviteCode        InviteCode?
-  videos            Video[]
-  uploadIntents     UploadIntent[]
-  clips             Clip[]
-  schedule          Schedule?
-  pushSubscriptions PushSubscription[]
-  nudgeLogs         NudgeLog[]
+  id                          String             @id @default(cuid())
+  accessCode                  String?            @unique
+  displayName                 String?
+  channelUrl                  String?
+  mindId                      String? // the creator's Minds agent (voice + clip-taste Tenets)
+  mindStage                   String? // pending | learning_voice | waking_mind | teaching_taste | ready | failed
+  mindError                   String? // Short named-step Mind onboarding failure message. Never stores stack traces.
+  mindRunId                   String? // Durable owner id for the active/last first-video Mind onboarding run.
+  mindLeaseHeartbeatAt        DateTime? // Last owner heartbeat. Active runs are retryable after 10 minutes without one.
+  mindStageAttempts           Json? // Per-stage attempt counts for first-video Mind onboarding.
+  initialTenets               Json? // distilled creator voice + clip-taste Tenets from onboarding
+  captionCorpus               String? // creator-pasted recent post-copy captions, one per line
+  channelPullStage            String? // listing | transcribing_1..3 | distilling | seeding | done | failed
+  channelPullError            String? // Short named-step channel pull failure message. Never stores stack traces.
+  channelPullRunId            String? // Durable owner id for the active/last channel pull run.
+  channelPullLeaseHeartbeatAt DateTime? // Last owner heartbeat. Active runs are retryable after 10 minutes without one.
+  channelPullStageAttempts    Json? // Per-stage attempt counts for channel pull.
+  captionStyle                Json? // burned-in subtitle preset: font, size, position, colour, highlight
+  timezone                    String? // IANA timezone captured client-side for creator-local copy
+  createdAt                   DateTime           @default(now())
+  inviteCode                  InviteCode?
+  videos                      Video[]
+  uploadIntents               UploadIntent[]
+  clips                       Clip[]
+  schedule                    Schedule?
+  pushSubscriptions           PushSubscription[]
+  nudgeLogs                   NudgeLog[]
 }
 
 model InviteCode {
@@ -45,35 +51,38 @@ model InviteCode {
 }
 
 model Video {
-  id                      String   @id @default(cuid())
-  creatorId               String
-  creator                 Creator  @relation(fields: [creatorId], references: [id])
-  sourceUrl               String?
-  sourceKey               String?
-  contentKey              String?  @unique
-  status                  String   @default("uploaded") // uploaded | transcribed | clipped
-  pipelineStage           String? // uploaded | transcribing | candidates | ranking | captions | done | failed
-  pipelineError           String?
-  pipelineRetryGeneration Int      @default(0)
-  createdAt               DateTime @default(now())
-  clips                   Clip[]
+  id                       String    @id @default(cuid())
+  creatorId                String
+  creator                  Creator   @relation(fields: [creatorId], references: [id])
+  sourceUrl                String?
+  sourceKey                String?
+  contentKey               String?   @unique
+  status                   String    @default("uploaded") // uploaded | transcribed | clipped
+  pipelineStage            String? // uploaded | transcribing | candidates | ranking | captions | done | failed
+  pipelineError            String?
+  pipelineRunId            String? // Durable owner id for the active/last upload pipeline run.
+  pipelineLeaseHeartbeatAt DateTime? // Last owner heartbeat. Active runs are retryable after 10 minutes without one.
+  pipelineStageAttempts    Json? // Per-stage attempt counts for the upload pipeline.
+  pipelineRetryGeneration  Int       @default(0)
+  createdAt                DateTime  @default(now())
+  clips                    Clip[]
 }
 
 model UploadIntent {
-  id                String   @id @default(cuid())
+  id                String    @id @default(cuid())
   creatorId         String
-  creator           Creator  @relation(fields: [creatorId], references: [id])
-  videoId           String?  @unique
-  sourceKey         String   @unique
+  creator           Creator   @relation(fields: [creatorId], references: [id])
+  videoId           String?   @unique
+  sourceKey         String    @unique
   uploadId          String?
   fileName          String?
   contentType       String
   declaredSizeBytes BigInt
   partSizeBytes     Int
-  status            String   @default("creating") // creating | uploading | completed | aborted | failed
-  failureReason     String?  @db.VarChar(500)
-  createdAt         DateTime @default(now())
-  lastActivityAt    DateTime @default(now())
+  status            String    @default("creating") // creating | uploading | completed | aborted | failed
+  failureReason     String?   @db.VarChar(500)
+  createdAt         DateTime  @default(now())
+  lastActivityAt    DateTime  @default(now())
   completedAt       DateTime?
   abortedAt         DateTime?
 

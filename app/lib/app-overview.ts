@@ -27,12 +27,15 @@ import { publicMediaUrlForKey } from "./storage";
 import { formatVideoLabel } from "./video-label";
 import { captionCorpusSummary } from "./caption-corpus";
 import type { PostCopyVariants } from "./captioning";
+import { canRetryPipelineStage } from "./pipeline";
 import {
+  canRetryMindOnboardingStage,
   creatorHasReadyMind,
   creatorNeedsMindOnboarding,
   failedMindOnboardingStage,
   isMindOnboardingStage,
 } from "./video-onboarding";
+import { workflowLeaseExpiredError } from "./workflow-lease";
 
 export type { HomeNudge, RunwayState } from "./nudges";
 
@@ -101,6 +104,7 @@ export type RhythmOverview = {
     captionCount: number;
     channelPullStage: string | null;
     channelPullError: string | null;
+    channelPullLeaseHeartbeatAt: Date | null;
     hasMind: boolean;
     timezone: string;
   };
@@ -209,6 +213,10 @@ export async function loadHomeOverview(
       },
       select: {
         timezone: true,
+        mindId: true,
+        mindStage: true,
+        mindError: true,
+        mindLeaseHeartbeatAt: true,
       },
     }),
     db.clip.findFirst({
@@ -297,8 +305,10 @@ export async function loadHomeOverview(
       take: 10,
       select: {
         id: true,
+        status: true,
         pipelineStage: true,
         pipelineError: true,
+        pipelineLeaseHeartbeatAt: true,
         createdAt: true,
       },
     }),
@@ -312,14 +322,24 @@ export async function loadHomeOverview(
   const readyToPost = readyToPostClips
     .filter((clip) => clip.scheduledFor)
     .map(toReadyToPostClip);
-  const uploadCards = selectHomeUploadCards(
-    activeUploadVideos.map((video) => ({
-      id: video.id,
-      label: formatVideoLabel(video.createdAt),
+  const uploadWorkflowVideos = activeUploadVideos.map((video) => {
+    const displayStage = displayUploadStage({
+      creator,
       pipelineStage: video.pipelineStage,
       pipelineError: video.pipelineError,
-    })),
-  );
+      pipelineLeaseHeartbeatAt: video.pipelineLeaseHeartbeatAt,
+      status: video.status,
+      now,
+    });
+
+    return {
+      id: video.id,
+      label: formatVideoLabel(video.createdAt),
+      pipelineStage: displayStage.stage,
+      pipelineError: displayStage.error,
+    };
+  });
+  const uploadCards = selectHomeUploadCards(uploadWorkflowVideos);
   const nudges = toHomeNudges(
     computeDueNudges(
       {
@@ -333,11 +353,7 @@ export async function loadHomeOverview(
           scheduledFor: new Date(clip.scheduledForIso),
           status: "scheduled",
         })),
-        failedVideos: activeUploadVideos.map((video) => ({
-          id: video.id,
-          pipelineStage: video.pipelineStage,
-          pipelineError: video.pipelineError,
-        })),
+        failedVideos: uploadWorkflowVideos,
       },
       now,
     ),
@@ -371,6 +387,8 @@ export async function loadUploadOverview(
   options: AppOverviewOptions = {},
 ): Promise<UploadOverview> {
   const db = options.prismaClient ?? prisma;
+  const now = options.now ?? new Date();
+  assertValidDate(now, "now");
   const [creator, videos] = await Promise.all([
     db.creator.findUniqueOrThrow({
       where: {
@@ -380,6 +398,7 @@ export async function loadUploadOverview(
         mindId: true,
         mindStage: true,
         mindError: true,
+        mindLeaseHeartbeatAt: true,
       },
     }),
     db.video.findMany({
@@ -410,6 +429,7 @@ export async function loadUploadOverview(
         status: true,
         pipelineStage: true,
         pipelineError: true,
+        pipelineLeaseHeartbeatAt: true,
         createdAt: true,
         clips: {
           select: {
@@ -429,7 +449,9 @@ export async function loadUploadOverview(
         creator,
         pipelineStage: video.pipelineStage,
         pipelineError: video.pipelineError,
+        pipelineLeaseHeartbeatAt: video.pipelineLeaseHeartbeatAt,
         status: video.status,
+        now,
       });
 
       return {
@@ -461,6 +483,7 @@ export async function loadRhythmOverview(
       captionCorpus: true,
       channelPullStage: true,
       channelPullError: true,
+      channelPullLeaseHeartbeatAt: true,
       mindId: true,
       timezone: true,
     },
@@ -480,6 +503,7 @@ export async function loadRhythmOverview(
       captionCount: corpus.captionCount,
       channelPullStage: creator.channelPullStage,
       channelPullError: creator.channelPullError,
+      channelPullLeaseHeartbeatAt: creator.channelPullLeaseHeartbeatAt,
       hasMind: Boolean(creator.mindId?.trim()),
       timezone: resolveCreatorTimezone(creator.timezone),
     },
@@ -588,10 +612,13 @@ function displayUploadStage(args: {
     mindId: string | null;
     mindStage: string | null;
     mindError: string | null;
+    mindLeaseHeartbeatAt: Date | null;
   };
   pipelineStage: string | null;
   pipelineError: string | null;
+  pipelineLeaseHeartbeatAt: Date | null;
   status: string;
+  now: Date;
 }): {
   stage: string;
   error: string | null;
@@ -606,6 +633,13 @@ function displayUploadStage(args: {
       };
     }
     if (isMindOnboardingStage(args.creator.mindStage)) {
+      if (canRetryMindOnboardingStage(args.creator, args.now)) {
+        return {
+          stage: "failed",
+          error: workflowLeaseExpiredError(args.creator.mindStage),
+        };
+      }
+
       return {
         stage: args.creator.mindStage,
         error: null,
@@ -618,8 +652,26 @@ function displayUploadStage(args: {
     };
   }
 
+  const stage = displayPipelineStage(args.pipelineStage, args.status);
+  if (
+    stage !== "done" &&
+    stage !== "failed" &&
+    canRetryPipelineStage(
+      {
+        pipelineStage: stage,
+        pipelineLeaseHeartbeatAt: args.pipelineLeaseHeartbeatAt,
+      },
+      args.now,
+    )
+  ) {
+    return {
+      stage: "failed",
+      error: workflowLeaseExpiredError(stage),
+    };
+  }
+
   return {
-    stage: displayPipelineStage(args.pipelineStage, args.status),
+    stage,
     error: args.pipelineError,
   };
 }

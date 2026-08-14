@@ -10,6 +10,7 @@ import {
 import {
   YT_BLOCKED_CHANNEL_PULL_MESSAGE,
   friendlyChannelPullError,
+  isActiveChannelPullStage,
   isChannelPullStage,
   type ActiveChannelPullStage,
   type ChannelPullStage,
@@ -35,6 +36,14 @@ import { loadCreatorSessionFromCookieHeader } from "./review-auth";
 import type { InitialTenets } from "./tenets";
 import type { Transcript } from "./transcript";
 import { loadCreatorTranscriptEvidence } from "./voice-corpus";
+import {
+  WorkflowLeaseLostError,
+  incrementStageAttempt,
+  isWorkflowLeaseExpired,
+  newWorkflowRunId,
+  withWorkflowHeartbeat,
+  workflowLeaseExpiredError,
+} from "./workflow-lease";
 
 export const CHANNEL_PULL_MAX_VIDEO_DURATION_S = 1_200;
 export const CHANNEL_PULL_MAX_TRANSCRIPTS = 3;
@@ -69,6 +78,7 @@ export type ChannelPullOptions = {
   ) => Promise<InitialTenets>;
   mindsClient?: MindsClient | null;
   now?: Date;
+  heartbeatIntervalMs?: number;
   stewardEmail?: string;
   channelUrl?: string;
   onStageChange?: (stage: ChannelPullStage) => void | Promise<void>;
@@ -115,6 +125,7 @@ export async function pullChannelVoice(
   options: ChannelPullOptions = {},
 ): Promise<PullChannelVoiceResult> {
   const db = options.prismaClient ?? prisma;
+  const runId = newWorkflowRunId("channel-pull");
   let activeStage: ActiveChannelPullStage = "listing";
 
   try {
@@ -126,6 +137,7 @@ export async function pullChannelVoice(
         channelUrl: true,
       },
     });
+    await claimChannelPullRun(db, creatorId, runId, options);
     const channelUrl = normalizeYouTubeChannelInput(
       options.channelUrl ?? creator.channelUrl ?? "",
     );
@@ -133,9 +145,14 @@ export async function pullChannelVoice(
       options.clipServiceClient ?? createDefaultClipServiceClient();
 
     await setChannelPullStage(db, creatorId, "listing", options, {
+      runId,
       channelUrl,
     });
-    const listedVideos = await clipServiceClient.listChannel(channelUrl);
+    const listedVideos = await withWorkflowHeartbeat(
+      () => heartbeatChannelPullRun(db, creatorId, runId, options),
+      () => clipServiceClient.listChannel(channelUrl),
+      options.heartbeatIntervalMs,
+    );
     const selectedVideos = selectChannelVideosForVoice(listedVideos);
     if (selectedVideos.length === 0) {
       throw new Error("No recent YouTube videos under 20 minutes.");
@@ -144,16 +161,25 @@ export async function pullChannelVoice(
     const channelTranscripts: WeightedTranscript[] = [];
     for (const [index, video] of selectedVideos.entries()) {
       activeStage = transcribingStage(index);
-      await setChannelPullStage(db, creatorId, activeStage, options);
-      const transcript = await clipServiceClient.transcribeRemote(
-        video.url,
-        CHANNEL_PULL_MAX_VIDEO_DURATION_S,
+      await setChannelPullStage(db, creatorId, activeStage, options, {
+        runId,
+      });
+      const transcript = await withWorkflowHeartbeat(
+        () => heartbeatChannelPullRun(db, creatorId, runId, options),
+        () =>
+          clipServiceClient.transcribeRemote(
+            video.url,
+            CHANNEL_PULL_MAX_VIDEO_DURATION_S,
+          ),
+        options.heartbeatIntervalMs,
       );
       channelTranscripts.push(channelTranscriptEvidence(video, transcript));
     }
 
     activeStage = "distilling";
-    await setChannelPullStage(db, creatorId, activeStage, options);
+    await setChannelPullStage(db, creatorId, activeStage, options, {
+      runId,
+    });
     const [freshCreator, existingTranscripts] = await Promise.all([
       db.creator.findUniqueOrThrow({
         where: {
@@ -175,43 +201,66 @@ export async function pullChannelVoice(
     }
 
     const distillTenets = options.distillTenets ?? createOpenAITenetDistiller();
-    const tenets = await distillTenets(transcripts, {
-      captionCorpus: freshCreator.captionCorpus,
-    });
+    const tenets = await withWorkflowHeartbeat(
+      () => heartbeatChannelPullRun(db, creatorId, runId, options),
+      () =>
+        distillTenets(transcripts, {
+          captionCorpus: freshCreator.captionCorpus,
+        }),
+      options.heartbeatIntervalMs,
+    );
 
     activeStage = "seeding";
-    await setChannelPullStage(db, creatorId, activeStage, options);
+    await setChannelPullStage(db, creatorId, activeStage, options, {
+      runId,
+    });
     const mindsClient = requireMindsClient(options.mindsClient);
     const now = options.now ?? new Date();
     assertValidDate(now, "now");
     let mindId = freshCreator.mindId?.trim() || null;
     let mindEmail: string | null = null;
     if (!mindId) {
-      const mind = await createCreatorMind({
-        creatorId,
-        stewardEmail: options.stewardEmail ?? DEFAULT_CREATOR_STEWARD_EMAIL,
-        mindsClient,
-      });
+      const mind = await withWorkflowHeartbeat(
+        () => heartbeatChannelPullRun(db, creatorId, runId, options),
+        () =>
+          createCreatorMind({
+            creatorId,
+            stewardEmail: options.stewardEmail ?? DEFAULT_CREATOR_STEWARD_EMAIL,
+            mindsClient,
+          }),
+        options.heartbeatIntervalMs,
+      );
       mindId = mind.mindId;
       mindEmail = mind.mindEmail;
-      await db.creator.update({
+      const mindStored = await db.creator.updateMany({
         where: {
           id: creatorId,
+          channelPullRunId: runId,
         },
         data: {
           mindId,
+          channelPullLeaseHeartbeatAt: options.now ?? new Date(),
         },
       });
+      if (mindStored.count !== 1) {
+        throw new WorkflowLeaseLostError("Channel pull", creatorId);
+      }
     }
 
-    const confirmation = await seedCreatorTenets(mindsClient, mindId, tenets, {
-      alias: buildChannelPullReseedAlias(creatorId, now),
-      action: "Channel pull Tenet seed",
-    });
+    const confirmation = await withWorkflowHeartbeat(
+      () => heartbeatChannelPullRun(db, creatorId, runId, options),
+      () =>
+        seedCreatorTenets(mindsClient, mindId, tenets, {
+          alias: buildChannelPullReseedAlias(creatorId, now),
+          action: "Channel pull Tenet seed",
+        }),
+      options.heartbeatIntervalMs,
+    );
 
-    await db.creator.update({
+    const completed = await db.creator.updateMany({
       where: {
         id: creatorId,
+        channelPullRunId: runId,
       },
       data: {
         channelUrl,
@@ -221,8 +270,12 @@ export async function pullChannelVoice(
         mindId,
         mindStage: "ready",
         mindError: null,
+        channelPullLeaseHeartbeatAt: options.now ?? new Date(),
       },
     });
+    if (completed.count !== 1) {
+      throw new WorkflowLeaseLostError("Channel pull", creatorId);
+    }
     await options.onStageChange?.("done");
 
     return {
@@ -239,15 +292,7 @@ export async function pullChannelVoice(
   } catch (error) {
     const errorCode = channelPullErrorCode(error);
     const errorText = `${activeStage}: ${errorCode ? `${errorCode}: ` : ""}${channelPullFailureMessage(error, errorCode)}`;
-    await db.creator.update({
-      where: {
-        id: creatorId,
-      },
-      data: {
-        channelPullStage: "failed",
-        channelPullError: errorText,
-      },
-    });
+    await markChannelPullFailed(db, creatorId, runId, errorText, options);
     await options.onStageChange?.("failed");
 
     return {
@@ -285,6 +330,26 @@ export async function handleStartChannelPull(
   }
 
   const db = options.prismaClient ?? prisma;
+  const creator = await db.creator.findUniqueOrThrow({
+    where: {
+      id: session.creatorId,
+    },
+    select: {
+      channelPullStage: true,
+      channelPullLeaseHeartbeatAt: true,
+    },
+  });
+  if (
+    isActiveChannelPullStage(creator.channelPullStage) &&
+    !isWorkflowLeaseExpired(
+      creator.channelPullLeaseHeartbeatAt,
+      options.now ?? new Date(),
+    )
+  ) {
+    return json({ error: "Recent video pull is already running." }, 409);
+  }
+
+  const runId = newWorkflowRunId("channel-pull");
   await db.creator.update({
     where: {
       id: session.creatorId,
@@ -293,6 +358,8 @@ export async function handleStartChannelPull(
       channelUrl,
       channelPullStage: "listing",
       channelPullError: null,
+      channelPullRunId: runId,
+      channelPullLeaseHeartbeatAt: options.now ?? new Date(),
     },
   });
 
@@ -329,11 +396,15 @@ export async function handleGetChannelPullStatus(
     select: {
       channelPullStage: true,
       channelPullError: true,
+      channelPullLeaseHeartbeatAt: true,
     },
   });
 
   return json(
-    channelPullStatusResponse(creator.channelPullStage, creator.channelPullError),
+    channelPullStatusResponse(creator.channelPullStage, creator.channelPullError, {
+      leaseHeartbeatAt: creator.channelPullLeaseHeartbeatAt,
+      now: options.now,
+    }),
     200,
   );
 }
@@ -341,16 +412,25 @@ export async function handleGetChannelPullStatus(
 export function channelPullStatusResponse(
   rawStage: string | null,
   rawError: string | null,
+  lease: {
+    leaseHeartbeatAt?: Date | null;
+    now?: Date;
+  } = {},
 ): {
   stage: ChannelPullStage | null;
   error: string | null;
   errorCode: string | null;
 } {
   const stage = isChannelPullStage(rawStage) ? rawStage : null;
+  const error =
+    stage && isActiveChannelPullStage(stage) &&
+    isWorkflowLeaseExpired(lease.leaseHeartbeatAt, lease.now ?? new Date())
+      ? workflowLeaseExpiredError(stage)
+      : rawError;
   return {
-    stage,
-    error: stage === "failed" ? friendlyChannelPullError(rawError) : null,
-    errorCode: channelPullErrorCodeFromText(rawError),
+    stage: error && stage !== "done" ? "failed" : stage,
+    error: error ? friendlyChannelPullError(error) : null,
+    errorCode: channelPullErrorCodeFromText(error),
   };
 }
 
@@ -470,19 +550,101 @@ async function setChannelPullStage(
   creatorId: string,
   stage: ActiveChannelPullStage,
   options: ChannelPullOptions,
-  extraData: { channelUrl?: string } = {},
+  extraData: { runId: string; channelUrl?: string },
+): Promise<void> {
+  const creator = await db.creator.findUniqueOrThrow({
+    where: {
+      id: creatorId,
+    },
+    select: {
+      channelPullRunId: true,
+      channelPullStageAttempts: true,
+    },
+  });
+  if (creator.channelPullRunId !== extraData.runId) {
+    throw new WorkflowLeaseLostError("Channel pull", creatorId);
+  }
+
+  const updated = await db.creator.updateMany({
+    where: {
+      id: creatorId,
+      channelPullRunId: extraData.runId,
+    },
+    data: {
+      channelUrl: extraData.channelUrl,
+      channelPullStage: stage,
+      channelPullError: null,
+      channelPullLeaseHeartbeatAt: options.now ?? new Date(),
+      channelPullStageAttempts: incrementStageAttempt(
+        creator.channelPullStageAttempts,
+        stage,
+      ),
+    },
+  });
+  if (updated.count !== 1) {
+    throw new WorkflowLeaseLostError("Channel pull", creatorId);
+  }
+  await options.onStageChange?.(stage);
+}
+
+async function claimChannelPullRun(
+  db: PrismaClient,
+  creatorId: string,
+  runId: string,
+  options: ChannelPullOptions,
 ): Promise<void> {
   await db.creator.update({
     where: {
       id: creatorId,
     },
     data: {
-      channelUrl: extraData.channelUrl,
-      channelPullStage: stage,
-      channelPullError: null,
+      channelPullRunId: runId,
+      channelPullLeaseHeartbeatAt: options.now ?? new Date(),
     },
   });
-  await options.onStageChange?.(stage);
+}
+
+async function heartbeatChannelPullRun(
+  db: PrismaClient,
+  creatorId: string,
+  runId: string,
+  options: ChannelPullOptions,
+): Promise<void> {
+  const updated = await db.creator.updateMany({
+    where: {
+      id: creatorId,
+      channelPullRunId: runId,
+    },
+    data: {
+      channelPullLeaseHeartbeatAt: options.now ?? new Date(),
+    },
+  });
+  if (updated.count !== 1) {
+    throw new WorkflowLeaseLostError("Channel pull", creatorId);
+  }
+}
+
+async function markChannelPullFailed(
+  db: PrismaClient,
+  creatorId: string,
+  runId: string,
+  errorText: string,
+  options: ChannelPullOptions,
+): Promise<void> {
+  const updated = await db.creator.updateMany({
+    where: {
+      id: creatorId,
+      channelPullRunId: runId,
+    },
+    data: {
+      channelPullStage: "failed",
+      channelPullError: errorText,
+      channelPullLeaseHeartbeatAt: options.now ?? new Date(),
+    },
+  });
+  if (updated.count !== 1) {
+    throw new WorkflowLeaseLostError("Channel pull", creatorId);
+  }
 }
 
 function requireMindsClient(

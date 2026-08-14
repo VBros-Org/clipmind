@@ -8,6 +8,7 @@ import {
   ChannelPullInputError,
   buildChannelPullReseedAlias,
   channelPullStatusResponse,
+  handleStartChannelPull,
   normalizeYouTubeChannelInput,
   pullChannelVoice,
   selectChannelVideosForVoice,
@@ -15,6 +16,7 @@ import {
   type ChannelPullOptions,
 } from "../lib/channelPull";
 import { YT_BLOCKED_CHANNEL_PULL_MESSAGE } from "../lib/channel-pull-status";
+import { cookieHeaderForAccessCode } from "../lib/review-auth";
 import type { MindsClient } from "../lib/minds";
 import type { InitialTenets } from "../lib/tenets";
 import type { Transcript } from "../lib/transcript";
@@ -173,12 +175,25 @@ test("pullChannelVoice progresses stages, merges captions, first-video transcrip
         channelUrl: true,
         channelPullStage: true,
         channelPullError: true,
+        channelPullRunId: true,
+        channelPullLeaseHeartbeatAt: true,
+        channelPullStageAttempts: true,
         initialTenets: true,
       },
     });
     assert.equal(creator.channelUrl, "https://www.youtube.com/@MrBeast");
     assert.equal(creator.channelPullStage, "done");
     assert.equal(creator.channelPullError, null);
+    assert.ok(creator.channelPullRunId?.startsWith("channel-pull-"));
+    assert.ok(creator.channelPullLeaseHeartbeatAt);
+    assert.deepEqual(creator.channelPullStageAttempts, {
+      listing: 1,
+      transcribing_1: 1,
+      transcribing_2: 1,
+      transcribing_3: 1,
+      distilling: 1,
+      seeding: 1,
+    });
     assert.deepEqual(creator.initialTenets, tenets);
   } finally {
     await cleanupFixture(fixture.creatorId);
@@ -327,9 +342,117 @@ test("pullChannelVoice records yt_blocked and status response returns friendly c
   }
 });
 
+test("channel pull POST restarts an expired active lease", async () => {
+  const fixture = await createFixture();
+  const pullCalls: Array<{ creatorId: string; channelUrl: string | undefined }> = [];
+
+  try {
+    await prisma.creator.update({
+      where: {
+        id: fixture.creatorId,
+      },
+      data: {
+        channelPullStage: "transcribing_2",
+        channelPullError: null,
+        channelPullRunId: "channel-pull-dead-run",
+        channelPullLeaseHeartbeatAt: new Date("2026-08-14T09:00:00.000Z"),
+      },
+    });
+
+    const response = await handleStartChannelPull(
+      new Request("https://clipmind.test/api/voice/channel-pull", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: cookieHeaderForAccessCode(fixture.accessCode),
+        },
+        body: JSON.stringify({
+          channelUrl: "@MrBeast",
+        }),
+      }),
+      {
+        prismaClient: prisma,
+        now: new Date("2026-08-14T09:11:00.000Z"),
+        async pullChannelVoiceImpl(creatorId, options) {
+          pullCalls.push({
+            creatorId,
+            channelUrl: options.channelUrl,
+          });
+          return {
+            status: "done",
+            creatorId,
+            channelUrl: options.channelUrl ?? "",
+            mindId: fixture.mindId,
+            mindEmail: null,
+            listedCount: 0,
+            transcriptCount: 0,
+            selectedVideos: [],
+            confirmation: "started",
+          };
+        },
+      },
+    );
+
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), {
+      channelUrl: "https://www.youtube.com/@MrBeast",
+      stage: "listing",
+      error: null,
+      errorCode: null,
+    });
+    assert.deepEqual(pullCalls, [
+      {
+        creatorId: fixture.creatorId,
+        channelUrl: "https://www.youtube.com/@MrBeast",
+      },
+    ]);
+
+    const creator = await prisma.creator.findUniqueOrThrow({
+      where: {
+        id: fixture.creatorId,
+      },
+      select: {
+        channelPullStage: true,
+        channelPullRunId: true,
+        channelPullLeaseHeartbeatAt: true,
+      },
+    });
+    assert.equal(creator.channelPullStage, "listing");
+    assert.notEqual(creator.channelPullRunId, "channel-pull-dead-run");
+    assert.deepEqual(
+      channelPullStatusResponse(creator.channelPullStage, null, {
+        leaseHeartbeatAt: creator.channelPullLeaseHeartbeatAt,
+        now: new Date("2026-08-14T09:11:00.000Z"),
+      }),
+      {
+        stage: "listing",
+        error: null,
+        errorCode: null,
+      },
+    );
+  } finally {
+    await cleanupFixture(fixture.creatorId);
+  }
+});
+
+test("channel pull status reports expired active leases as failed", () => {
+  assert.deepEqual(
+    channelPullStatusResponse("transcribing_2", null, {
+      leaseHeartbeatAt: new Date("2026-08-14T09:00:00.000Z"),
+      now: new Date("2026-08-14T09:11:00.000Z"),
+    }),
+    {
+      stage: "failed",
+      error: "Recent video pull failed. Paste captions or upload a video instead.",
+      errorCode: null,
+    },
+  );
+});
+
 type ChannelPullFixture = {
   creatorId: string;
   mindId: string;
+  accessCode: string;
   captionCorpus: string;
   firstVideoTranscript: string;
 };
@@ -356,6 +479,7 @@ async function createFixture(
     },
     select: {
       id: true,
+      accessCode: true,
       mindId: true,
     },
   });
@@ -384,6 +508,7 @@ async function createFixture(
   return {
     creatorId: creator.id,
     mindId: creator.mindId ?? "",
+    accessCode: creator.accessCode ?? "",
     captionCorpus,
     firstVideoTranscript,
   };

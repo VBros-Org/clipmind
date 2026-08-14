@@ -417,6 +417,165 @@ test("retryPipeline resumes from the failed stage without re-ingesting earlier s
   }
 });
 
+test("retryPipeline resumes an expired active stage exactly once", async () => {
+  const fixture = await createPipelineFixture({
+    pipelineStage: "ranking",
+  });
+  let ingestCalls = 0;
+  let rankCalls = 0;
+  let captionCalls = 0;
+
+  try {
+    await prisma.video.update({
+      where: {
+        id: fixture.videoId,
+      },
+      data: {
+        pipelineLeaseHeartbeatAt: new Date("2026-08-14T09:00:00.000Z"),
+        pipelineStageAttempts: {
+          ranking: 1,
+        },
+      },
+    });
+    await prisma.clip.createMany({
+      data: [
+        {
+          creatorId: fixture.creatorId,
+          videoId: fixture.videoId,
+          startMs: 1_000,
+          endMs: 9_000,
+          transcript: "First expired retry candidate.",
+          status: "candidate",
+        },
+        {
+          creatorId: fixture.creatorId,
+          videoId: fixture.videoId,
+          startMs: 10_000,
+          endMs: 20_000,
+          transcript: "Second expired retry candidate.",
+          status: "candidate",
+        },
+      ],
+    });
+
+    const result = await retryPipeline(fixture.videoId, {
+      prismaClient: prisma,
+      now: new Date("2026-08-14T09:11:00.000Z"),
+      ingestUploadedVideoImpl: async () => {
+        ingestCalls += 1;
+        throw new Error("Expired-stage retry should not ingest.");
+      },
+      rankCandidatesImpl: async (creatorId, videoId, options) => {
+        rankCalls += 1;
+        const db = options?.prismaClient ?? prisma;
+        const clips = await db.clip.findMany({
+          where: {
+            creatorId,
+            videoId,
+            status: "candidate",
+          },
+          orderBy: {
+            startMs: "asc",
+          },
+        });
+
+        const rankings = [];
+        for (const [index, clip] of clips.entries()) {
+          await db.clip.update({
+            where: {
+              id: clip.id,
+            },
+            data: {
+              mindRank: index + 1,
+              mindRankReason: `Recovered rank ${index + 1}`,
+            },
+          });
+          rankings.push({
+            clipId: clip.id,
+            candidateIndex: index + 1,
+            mindRank: index + 1,
+            reason: `Recovered rank ${index + 1}`,
+            expectedStatus: "candidate" as const,
+            startMs: clip.startMs,
+            endMs: clip.endMs,
+            transcript: clip.transcript,
+            status: "candidate" as const,
+          });
+        }
+
+        return {
+          status: "ranked",
+          creatorId,
+          videoId,
+          mindId: "mind-expired-retry",
+          attempts: 1,
+          rankings,
+        };
+      },
+      captionClipImpl: async (clipId, options) => {
+        captionCalls += 1;
+        const db = options?.prismaClient ?? prisma;
+        await db.clip.update({
+          where: {
+            id: clipId,
+          },
+          data: {
+            postCopy: `Recovered ${captionCalls} for TikTok #clipmind`,
+            postCopyVariants: {
+              youtube: `Recovered ${captionCalls} title`,
+              tiktok: `Recovered ${captionCalls} for TikTok #clipmind`,
+              instagram: `Recovered ${captionCalls} on Instagram.\nExtra context here\n\n#clipmind`,
+            },
+          },
+        });
+
+        return {
+          status: "captioned",
+          clipId,
+          videoId: fixture.videoId,
+          creatorId: fixture.creatorId,
+          mindId: "mind-expired-retry",
+          attempts: 1,
+          variants: {
+            youtube: `Recovered ${captionCalls} title`,
+            tiktok: `Recovered ${captionCalls} for TikTok #clipmind`,
+            instagram: `Recovered ${captionCalls} on Instagram.\nExtra context here\n\n#clipmind`,
+          },
+        };
+      },
+      generateClipThumbnailImpl: async () => {
+        throw new Error("Expired retry from ranking should not generate thumbnails.");
+      },
+    });
+
+    assert.equal(result.status, "done");
+    assert.equal(ingestCalls, 0);
+    assert.equal(rankCalls, 1);
+    assert.equal(captionCalls, 2);
+
+    const video = await prisma.video.findUniqueOrThrow({
+      where: {
+        id: fixture.videoId,
+      },
+      select: {
+        pipelineStage: true,
+        pipelineRunId: true,
+        pipelineLeaseHeartbeatAt: true,
+        pipelineStageAttempts: true,
+      },
+    });
+    assert.equal(video.pipelineStage, "done");
+    assert.ok(video.pipelineRunId?.startsWith("pipeline-"));
+    assert.ok(video.pipelineLeaseHeartbeatAt);
+    assert.deepEqual(video.pipelineStageAttempts, {
+      ranking: 2,
+      captions: 1,
+    });
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
 test("runPipeline logs thumbnail failures and continues", async () => {
   const fixture = await createPipelineFixture();
   const warnings: string[] = [];

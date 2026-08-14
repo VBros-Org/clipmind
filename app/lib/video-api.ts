@@ -8,6 +8,7 @@ import { prisma } from "./db";
 import { loadRecentUploads } from "./app-overview";
 import {
   PIPELINE_STAGES,
+  canRetryPipelineStage,
   failedPipelineStage,
   retryPipeline,
   runPipeline,
@@ -25,12 +26,14 @@ import {
 } from "./storage";
 import {
   creatorNeedsMindOnboarding,
+  canRetryMindOnboardingStage,
   failedMindOnboardingStage,
   isMindOnboardingStage,
   runFirstVideoOnboardingPipeline,
   type FirstVideoOnboardingResult,
   type MindOnboardingStage,
 } from "./video-onboarding";
+import { newWorkflowRunId, workflowLeaseExpiredError } from "./workflow-lease";
 
 export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 export const MAX_UPLOAD_BYTES_LABEL = "2 GB";
@@ -56,6 +59,7 @@ type MultipartUploadStorage = Pick<
 
 export type VideoApiOptions = {
   prismaClient?: PrismaClient;
+  now?: Date;
   storage?: Pick<R2Storage, "uploadSource">;
   multipartStorage?: MultipartUploadStorage;
   deleteStorage?: VideoDeleteStorage;
@@ -124,6 +128,7 @@ export async function handleUploadVideo(
     });
     const runMindOnboarding = creatorNeedsMindOnboarding(creator);
     const videoId = randomUUID();
+    const now = new Date();
     const upload = await streamMultipartVideoToStorage(
       request,
       videoId,
@@ -140,6 +145,8 @@ export async function handleUploadVideo(
         status: "uploaded",
         pipelineStage: "uploaded",
         pipelineError: null,
+        pipelineRunId: runMindOnboarding ? null : newWorkflowRunId("pipeline"),
+        pipelineLeaseHeartbeatAt: runMindOnboarding ? null : now,
       },
       select: {
         id: true,
@@ -154,6 +161,8 @@ export async function handleUploadVideo(
         data: {
           mindStage: "learning_voice",
           mindError: null,
+          mindRunId: newWorkflowRunId("mind-onboarding"),
+          mindLeaseHeartbeatAt: now,
         },
       });
     }
@@ -550,12 +559,14 @@ export async function handleGetVideoStatus(
       id: true,
       pipelineStage: true,
       pipelineError: true,
+      pipelineLeaseHeartbeatAt: true,
       status: true,
       creator: {
         select: {
           mindId: true,
           mindStage: true,
           mindError: true,
+          mindLeaseHeartbeatAt: true,
         },
       },
       clips: {
@@ -570,7 +581,7 @@ export async function handleGetVideoStatus(
     return json({ error: "Video not found." }, 404);
   }
 
-  const workflow = normalizedUploadWorkflowStage(video);
+  const workflow = normalizedUploadWorkflowStage(video, options.now);
 
   return json(
     {
@@ -744,11 +755,14 @@ export async function handleRetryVideo(
       id: true,
       pipelineStage: true,
       pipelineError: true,
+      pipelineLeaseHeartbeatAt: true,
+      status: true,
       creator: {
         select: {
           mindId: true,
           mindStage: true,
           mindError: true,
+          mindLeaseHeartbeatAt: true,
         },
       },
     },
@@ -759,11 +773,11 @@ export async function handleRetryVideo(
   }
 
   if (creatorNeedsMindOnboarding(video.creator)) {
-    if (video.creator.mindStage !== "failed") {
+    if (!canRetryMindOnboardingStage(video.creator, options.now)) {
       return json({ error: "Only failed uploads can be retried." }, 409);
     }
 
-    const retryStage = failedMindOnboardingStage(video.creator.mindError);
+    const retryStage = retryableMindOnboardingStage(video.creator);
     await incrementPipelineRetryGeneration(db, video.id);
     startPipelineInBackground(
       video.id,
@@ -782,11 +796,11 @@ export async function handleRetryVideo(
     );
   }
 
-  if (video.pipelineStage !== "failed") {
+  if (!canRetryPipelineStage(video, options.now)) {
     return json({ error: "Only failed uploads can be retried." }, 409);
   }
 
-  const retryStage = failedPipelineStage(video.pipelineError);
+  const retryStage = retryablePipelineStage(video);
   await incrementPipelineRetryGeneration(db, video.id);
   startPipelineInBackground(
     video.id,
@@ -1134,6 +1148,8 @@ async function createVideoAfterMultipartCompletion(
         status: "uploaded",
         pipelineStage: "uploaded",
         pipelineError: null,
+        pipelineRunId: runMindOnboarding ? null : newWorkflowRunId("pipeline"),
+        pipelineLeaseHeartbeatAt: runMindOnboarding ? null : now,
       },
       select: {
         id: true,
@@ -1161,6 +1177,8 @@ async function createVideoAfterMultipartCompletion(
         data: {
           mindStage: "learning_voice",
           mindError: null,
+          mindRunId: newWorkflowRunId("mind-onboarding"),
+          mindLeaseHeartbeatAt: now,
         },
       });
     }
@@ -1428,16 +1446,44 @@ function normalizedPipelineStage(
   }
 }
 
+function retryablePipelineStage(video: {
+  pipelineStage: string | null;
+  pipelineError: string | null;
+  status: string;
+}): UploadWorkflowStage {
+  if (video.pipelineStage === "failed") {
+    return failedPipelineStage(video.pipelineError);
+  }
+
+  return normalizedPipelineStage(video.pipelineStage, video.status);
+}
+
+function retryableMindOnboardingStage(creator: {
+  mindStage: string | null;
+  mindError: string | null;
+}): MindOnboardingStage {
+  if (creator.mindStage === "failed") {
+    return failedMindOnboardingStage(creator.mindError);
+  }
+  if (isMindOnboardingStage(creator.mindStage)) {
+    return creator.mindStage;
+  }
+
+  return "learning_voice";
+}
+
 function normalizedUploadWorkflowStage(video: {
   pipelineStage: string | null;
   pipelineError: string | null;
+  pipelineLeaseHeartbeatAt: Date | null;
   status: string;
   creator: {
     mindId: string | null;
     mindStage: string | null;
     mindError: string | null;
+    mindLeaseHeartbeatAt: Date | null;
   };
-}): {
+}, now: Date = new Date()): {
   stage: UploadWorkflowStage;
   error: string | null;
   failedStage: UploadWorkflowStage | null;
@@ -1452,6 +1498,14 @@ function normalizedUploadWorkflowStage(video: {
     }
 
     if (isMindOnboardingStage(video.creator.mindStage)) {
+      if (canRetryMindOnboardingStage(video.creator, now)) {
+        return {
+          stage: "failed",
+          error: workflowLeaseExpiredError(video.creator.mindStage),
+          failedStage: video.creator.mindStage,
+        };
+      }
+
       return {
         stage: video.creator.mindStage,
         error: null,
@@ -1467,6 +1521,22 @@ function normalizedUploadWorkflowStage(video: {
   }
 
   const stage = normalizedPipelineStage(video.pipelineStage, video.status);
+  if (stage !== "done" && canRetryPipelineStage(video, now)) {
+    if (video.pipelineStage === "failed") {
+      return {
+        stage,
+        error: video.pipelineError,
+        failedStage: failedPipelineStage(video.pipelineError),
+      };
+    }
+
+    return {
+      stage: "failed",
+      error: workflowLeaseExpiredError(stage),
+      failedStage: stage,
+    };
+  }
+
   return {
     stage,
     error: video.pipelineError,
