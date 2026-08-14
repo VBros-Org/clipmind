@@ -2,6 +2,8 @@
 
 import { useEffect } from "react";
 
+import { listenForForegroundNudges } from "../app/rhythm/push-client";
+
 export function ServiceWorkerRegistration() {
   useEffect(() => {
     if (!("serviceWorker" in navigator)) {
@@ -24,6 +26,10 @@ export function ServiceWorkerRegistration() {
     // Roll the 30-day creator session cookie on real activity (once per app
     // load), so active creators never hit the fixed-expiry logout.
     fetch("/api/session/heartbeat", { method: "POST" }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    return listenForForegroundNudges();
   }, []);
 
   return null;

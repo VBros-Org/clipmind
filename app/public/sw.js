@@ -1,12 +1,16 @@
-const SHELL_CACHE = "clipmind-shell-v2";
-const STATIC_CACHE = "clipmind-static-v1";
-const DATA_CACHE = "clipmind-data-v1";
-const PRECACHE_URLS = [
-  "/manifest.webmanifest",
-  "/icons/clipmind-192.png",
-  "/icons/clipmind-512.png",
-  "/icons/clipmind-maskable-512.png"
-];
+importScripts("/sw-helpers.js");
+
+const {
+  PUBLIC_CACHE,
+  PRECACHE_URLS,
+  cachePolicy,
+  isResponseCacheable,
+  navigationFallbacks,
+  notificationTargetHref,
+  shouldSkipNotificationWindow
+} = self.ClipMindPwa;
+
+const uploadingClientIds = new Set();
 
 try {
   importScripts("/firebase-messaging-sw.js");
@@ -15,42 +19,42 @@ try {
 }
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(precacheStaticAssets());
+  event.waitUntil(precachePublicAssets());
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(cleanOldCaches());
 });
 
+self.addEventListener("message", (event) => {
+  const data = event.data || {};
+  if (data.type !== "clipmind-upload-state") {
+    return;
+  }
+
+  const clientId = event.source?.id;
+  if (!clientId) {
+    return;
+  }
+
+  if (data.uploadInProgress === true) {
+    uploadingClientIds.add(clientId);
+  } else {
+    uploadingClientIds.delete(clientId);
+  }
+});
+
 self.addEventListener("fetch", (event) => {
   const request = event.request;
+  const policy = cachePolicy(contextForRequest(request));
 
-  if (request.method !== "GET") {
+  if (policy === "public-cache") {
+    event.respondWith(cacheFirstPublicAsset(request));
     return;
   }
 
-  const url = new URL(request.url);
-  if (url.origin !== self.location.origin) {
-    return;
-  }
-
-  if (isMediaRequest(request)) {
-    return;
-  }
-
-  if (isDocumentRequest(request)) {
-    event.respondWith(networkFirst(request, SHELL_CACHE));
-    return;
-  }
-
-  if (isApiOrDataRequest(request, url)) {
-    event.respondWith(networkFirst(request, DATA_CACHE));
-    return;
-  }
-
-  if (isStaticRequest(request, url)) {
-    event.respondWith(cacheFirst(request, STATIC_CACHE));
-    return;
+  if (policy === "navigation") {
+    event.respondWith(networkNavigation(request));
   }
 });
 
@@ -59,17 +63,18 @@ self.addEventListener("notificationclick", (event) => {
   event.waitUntil(openNotificationTarget(event.notification.data?.url));
 });
 
-async function precacheStaticAssets() {
-  const cache = await caches.open(STATIC_CACHE);
+async function precachePublicAssets() {
+  const cache = await caches.open(PUBLIC_CACHE);
 
   await Promise.allSettled(
     PRECACHE_URLS.map(async (url) => {
-      const response = await fetch(url, {
+      const request = new Request(url, {
         cache: "reload",
         credentials: "same-origin"
       });
+      const response = await fetch(request);
 
-      if (response.ok && !response.redirected) {
+      if (isResponseCacheable(contextForRequest(request), responseSummary(response))) {
         await cache.put(url, response.clone());
       }
     })
@@ -79,113 +84,130 @@ async function precacheStaticAssets() {
 }
 
 async function cleanOldCaches() {
-  const allowedCaches = new Set([SHELL_CACHE, STATIC_CACHE, DATA_CACHE]);
   const names = await caches.keys();
 
   await Promise.all(
     names
-      .filter((name) => !allowedCaches.has(name))
+      .filter((name) => name !== PUBLIC_CACHE)
       .map((name) => caches.delete(name))
   );
 
   await self.clients.claim();
 }
 
-async function cacheFirst(request, cacheName) {
+async function cacheFirstPublicAsset(request) {
   const cached = await caches.match(request);
   if (cached) {
     return cached;
   }
 
   const response = await fetch(request);
-  await putIfCacheable(request, response, cacheName);
+  await putIfPublicCacheable(request, response);
   return response;
 }
 
-async function networkFirst(request, cacheName) {
+async function networkNavigation(request) {
   try {
-    const response = await fetch(request);
-    await putIfCacheable(request, response, cacheName);
-    return response;
+    return await fetch(request);
   } catch (error) {
-    const cached = await caches.match(request);
+    return offlineNavigationFallback(request);
+  }
+}
+
+async function offlineNavigationFallback(request) {
+  for (const fallback of navigationFallbacks(contextForRequest(request))) {
+    const cached = await caches.match(fallback.url, {
+      ignoreSearch: fallback.ignoreSearch
+    });
     if (cached) {
       return cached;
     }
-
-    throw error;
   }
+
+  return new Response("ClipMind is offline. Reconnect to open your workspace.", {
+    status: 503,
+    headers: {
+      "Cache-Control": "no-store",
+      "Content-Type": "text/plain; charset=utf-8"
+    }
+  });
 }
 
-async function putIfCacheable(request, response, cacheName) {
-  if (!response.ok || response.redirected) {
+async function putIfPublicCacheable(request, response) {
+  if (!isResponseCacheable(contextForRequest(request), responseSummary(response))) {
     return;
   }
 
-  const cache = await caches.open(cacheName);
+  const cache = await caches.open(PUBLIC_CACHE);
   await cache.put(request, response.clone());
 }
 
-function isApiOrDataRequest(request, url) {
-  return (
-    url.pathname.startsWith("/api/") ||
-    url.pathname.startsWith("/_next/data/") ||
-    url.searchParams.has("_rsc") ||
-    request.headers.get("accept")?.includes("text/x-component") === true
-  );
-}
-
-function isStaticRequest(request, url) {
-  return (
-    url.pathname.startsWith("/_next/static/") ||
-    url.pathname.startsWith("/icons/") ||
-    url.pathname === "/manifest.webmanifest"
-  );
-}
-
-function isDocumentRequest(request) {
-  return (
-    request.mode === "navigate" ||
-    request.destination === "document" ||
-    request.headers.get("accept")?.includes("text/html") === true
-  );
-}
-
-function isMediaRequest(request) {
-  return ["audio", "video"].includes(request.destination);
-}
-
 async function openNotificationTarget(rawUrl) {
-  const targetUrl = normalizeNotificationUrl(rawUrl);
+  const targetHref = notificationTargetHref(rawUrl, self.location.origin);
   const windows = await self.clients.matchAll({
     type: "window",
     includeUncontrolled: true
   });
 
   for (const client of windows) {
-    const clientUrl = new URL(client.url);
-    if (clientUrl.origin !== self.location.origin) {
+    if (!sameOrigin(client.url)) {
       continue;
     }
 
-    if ("navigate" in client) {
-      await client.navigate(targetUrl.href);
+    if (
+      shouldSkipNotificationWindow({
+        url: client.url,
+        origin: self.location.origin,
+        uploadInProgress: uploadingClientIds.has(client.id)
+      })
+    ) {
+      continue;
     }
-    return client.focus();
+
+    return focusOrOpen(client, targetHref);
   }
 
-  return self.clients.openWindow(targetUrl.href);
+  return self.clients.openWindow(targetHref);
 }
 
-function normalizeNotificationUrl(rawUrl) {
+async function focusOrOpen(client, targetHref) {
   try {
-    const url = new URL(rawUrl || "/home", self.location.origin);
-    if (url.origin === self.location.origin) {
-      return url;
+    if ("navigate" in client && client.url !== targetHref) {
+      const navigatedClient = await client.navigate(targetHref);
+      if (navigatedClient) {
+        return navigatedClient.focus();
+      }
     }
-  } catch (error) {
-    return new URL("/home", self.location.origin);
-  }
 
-  return new URL("/home", self.location.origin);
+    return client.focus();
+  } catch (error) {
+    return self.clients.openWindow(targetHref);
+  }
+}
+
+function contextForRequest(request) {
+  return {
+    url: request.url,
+    origin: self.location.origin,
+    method: request.method,
+    mode: request.mode,
+    destination: request.destination,
+    accept: request.headers.get("accept")
+  };
+}
+
+function responseSummary(response) {
+  return {
+    ok: response.ok,
+    redirected: response.redirected,
+    cacheControl: response.headers.get("cache-control")
+  };
+}
+
+function sameOrigin(rawUrl) {
+  try {
+    return new URL(rawUrl).origin === self.location.origin;
+  } catch (error) {
+    return false;
+  }
 }
