@@ -6,6 +6,7 @@ import type { PrismaClient } from "@prisma/client";
 
 import { prisma } from "./db";
 import { loadRecentUploads } from "./app-overview";
+import { publicUploadWorkflowErrorMessage } from "./public-upload-errors";
 import {
   PIPELINE_STAGES,
   canRetryPipelineStage,
@@ -68,6 +69,7 @@ export type VideoApiOptions = {
   runFirstVideoOnboardingPipelineImpl?: (
     videoId: string,
   ) => Promise<BackgroundRunResult>;
+  deleteLogger?: Pick<Console, "error">;
 };
 
 type UploadedFile = {
@@ -586,7 +588,12 @@ export async function handleGetVideoStatus(
   return json(
     {
       stage: workflow.stage,
-      error: workflow.error,
+      error: workflow.error
+        ? publicUploadWorkflowErrorMessage(
+            workflow.error,
+            workflow.failedStage ?? workflow.stage,
+          )
+        : null,
       failedStage: workflow.failedStage,
       clipCount: video.clips.length,
     },
@@ -662,16 +669,6 @@ export async function handleDeleteVideo(
     return postedHistoryResponse();
   }
 
-  const deleteTargets = videoDeleteTargets(video);
-  const storage = options.deleteStorage ?? createR2Storage();
-  for (const target of deleteTargets) {
-    if (target.bucket === "sources") {
-      await storage.deleteSource(target.key);
-    } else {
-      await storage.deleteMediaObject(target.key);
-    }
-  }
-
   try {
     const rowCounts = await db.$transaction(async (tx) => {
       const postedClipCount = await tx.clip.count({
@@ -714,6 +711,13 @@ export async function handleDeleteVideo(
         videos: videoDelete.count,
       };
     });
+    const deleteTargets = videoDeleteTargets(video);
+    const storage = options.deleteStorage ?? createR2Storage();
+    await deleteVideoObjectsBestEffort(
+      storage,
+      deleteTargets,
+      options.deleteLogger ?? console,
+    );
 
     return json(
       {
@@ -1580,6 +1584,31 @@ function videoDeleteTargets(video: {
   }
 
   return targets;
+}
+
+async function deleteVideoObjectsBestEffort(
+  storage: VideoDeleteStorage,
+  targets: Array<{ bucket: "sources" | "media"; key: string }>,
+  logger: Pick<Console, "error">,
+): Promise<void> {
+  for (const target of targets) {
+    try {
+      if (target.bucket === "sources") {
+        await storage.deleteSource(target.key);
+      } else {
+        await storage.deleteMediaObject(target.key);
+      }
+    } catch (error) {
+      logger.error(
+        [
+          "Video R2 delete failed",
+          `bucket=${target.bucket}`,
+          `key=${target.key}`,
+          `error=${errorMessage(error)}`,
+        ].join(" "),
+      );
+    }
+  }
 }
 
 function headersObject(headers: Headers): Record<string, string> {

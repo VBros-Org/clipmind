@@ -24,6 +24,7 @@ import {
 import { ensureScheduleForCreator } from "./scheduling-repository";
 import { resolveCreatorTimezone } from "./timezone";
 import { publicMediaUrlForKey } from "./storage";
+import { publicUploadWorkflowErrorMessage } from "./public-upload-errors";
 import { formatVideoLabel } from "./video-label";
 import { captionCorpusSummary } from "./caption-corpus";
 import type { PostCopyVariants } from "./captioning";
@@ -627,16 +628,20 @@ function displayUploadStage(args: {
     if (args.creator.mindStage === "failed") {
       return {
         stage: "failed",
-        error:
-          args.creator.mindError ??
-          `${failedMindOnboardingStage(args.creator.mindError)}: Mind onboarding failed.`,
+        error: publicUploadWorkflowErrorMessage(
+          args.creator.mindError,
+          failedMindOnboardingStage(args.creator.mindError),
+        ),
       };
     }
     if (isMindOnboardingStage(args.creator.mindStage)) {
       if (canRetryMindOnboardingStage(args.creator, args.now)) {
         return {
           stage: "failed",
-          error: workflowLeaseExpiredError(args.creator.mindStage),
+          error: publicUploadWorkflowErrorMessage(
+            workflowLeaseExpiredError(args.creator.mindStage),
+            args.creator.mindStage,
+          ),
         };
       }
 
@@ -666,13 +671,18 @@ function displayUploadStage(args: {
   ) {
     return {
       stage: "failed",
-      error: workflowLeaseExpiredError(stage),
+      error: publicUploadWorkflowErrorMessage(
+        workflowLeaseExpiredError(stage),
+        stage,
+      ),
     };
   }
 
   return {
     stage,
-    error: args.pipelineError,
+    error: args.pipelineError
+      ? publicUploadWorkflowErrorMessage(args.pipelineError, stage)
+      : null,
   };
 }
 

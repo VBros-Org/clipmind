@@ -101,6 +101,7 @@ export interface R2Storage {
   deleteMediaObject(key: string): Promise<void>;
   listSourceMultipartUploads(prefix?: string): Promise<SourceMultipartUpload[]>;
   listSourceObjects(prefix?: string): Promise<SourceObject[]>;
+  listMediaObjects(prefix?: string): Promise<SourceObject[]>;
   probeBuckets(): Promise<StorageProbeResult[]>;
 }
 
@@ -259,6 +260,10 @@ export function createR2Storage(options: R2StorageOptions = {}): R2Storage {
 
     async listSourceObjects(prefix = "") {
       return listObjects(s3Client, storageEnv.R2_SOURCES_BUCKET, prefix);
+    },
+
+    async listMediaObjects(prefix = "") {
+      return listObjects(s3Client, storageEnv.R2_MEDIA_BUCKET, prefix);
     },
 
     async probeBuckets() {

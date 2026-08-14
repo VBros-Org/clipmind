@@ -1,5 +1,3 @@
-const FIREBASE_VERSION = "12.16.0";
-
 export const dynamic = "force-static";
 
 export function GET() {
@@ -32,8 +30,8 @@ function buildServiceWorkerSource(): string {
   }
 
   try {
-    importScripts("https://www.gstatic.com/firebasejs/${FIREBASE_VERSION}/firebase-app-compat.js");
-    importScripts("https://www.gstatic.com/firebasejs/${FIREBASE_VERSION}/firebase-messaging-compat.js");
+    importScripts("/vendor/firebase/firebase-app-compat.js");
+    importScripts("/vendor/firebase/firebase-messaging-compat.js");
 
     firebase.initializeApp(firebaseConfig);
     const messaging = firebase.messaging();

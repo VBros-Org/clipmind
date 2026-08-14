@@ -5,6 +5,7 @@ import test from "node:test";
 import vm from "node:vm";
 
 import { detectInstallPlatform } from "../lib/install";
+import { buildSecurityHeaders } from "../lib/security-headers";
 
 type WebManifest = {
   name?: string;
@@ -105,6 +106,76 @@ test("service worker uses v3 public-only cache and offline fallback", async () =
   assert.match(serviceWorker, /firebase-messaging-sw\.js/);
   assert.match(serviceWorker, /notificationclick/);
   assert.match(serviceWorker, /openWindow\(targetHref\)/);
+});
+
+test("Firebase messaging service worker imports locally vendored compat scripts", async () => {
+  const routeSource = await readFile(
+    resolve(process.cwd(), "src/app/firebase-messaging-sw.js/route.ts"),
+    "utf8",
+  );
+  const appCompat = await readFile(
+    resolve(process.cwd(), "public/vendor/firebase/firebase-app-compat.js"),
+    "utf8",
+  );
+  const messagingCompat = await readFile(
+    resolve(process.cwd(), "public/vendor/firebase/firebase-messaging-compat.js"),
+    "utf8",
+  );
+
+  assert.match(routeSource, /\/vendor\/firebase\/firebase-app-compat\.js/);
+  assert.match(routeSource, /\/vendor\/firebase\/firebase-messaging-compat\.js/);
+  assert.doesNotMatch(routeSource, /gstatic\.com/);
+  assert.doesNotMatch(appCompat, /gstatic\.com/);
+  assert.doesNotMatch(messagingCompat, /gstatic\.com/);
+});
+
+test("security headers include baseline CSP and browser hardening", () => {
+  const headers = Object.fromEntries(
+    buildSecurityHeaders({
+      mediaPublicBase: "https://cdn.example/media/",
+      r2SourcesBucket: "clipmind-sources",
+      r2AccountId: "acct123",
+      nodeEnv: "production",
+    }).map((header) => [header.key, header.value]),
+  );
+
+  assert.equal(headers["X-Content-Type-Options"], "nosniff");
+  assert.equal(headers["Referrer-Policy"], "strict-origin-when-cross-origin");
+  assert.equal(
+    headers["Permissions-Policy"],
+    "camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), hid=(), browsing-topics=()",
+  );
+
+  const csp = headers["Content-Security-Policy"] ?? "";
+  assert.match(csp, /default-src 'self'/);
+  assert.match(csp, /base-uri 'self'/);
+  assert.match(csp, /script-src 'self' 'unsafe-inline'/);
+  assert.doesNotMatch(csp, /unsafe-eval/);
+  assert.match(csp, /style-src 'self' 'unsafe-inline'/);
+  assert.match(csp, /img-src 'self' data: https:\/\/cdn\.example/);
+  assert.match(csp, /media-src 'self' blob: https:\/\/cdn\.example/);
+  assert.match(
+    csp,
+    /connect-src 'self' https:\/\/cdn\.example https:\/\/clipmind-sources\.acct123\.r2\.cloudflarestorage\.com https:\/\/firebaseinstallations\.googleapis\.com https:\/\/fcmregistrations\.googleapis\.com/,
+  );
+  assert.match(csp, /worker-src 'self' blob:/);
+  assert.match(csp, /object-src 'none'/);
+  assert.match(csp, /frame-src 'none'/);
+  assert.match(csp, /frame-ancestors 'none'/);
+  assert.match(csp, /form-action 'self'/);
+
+  // Presigned sources origin: review preview (media-src) and direct multipart
+  // upload PUTs (connect-src) both break without it.
+  const sourcesOrigin =
+    "https://clipmind-sources.acct123.r2.cloudflarestorage.com";
+  assert.match(
+    csp,
+    new RegExp(`media-src [^;]*${sourcesOrigin.replace(/[.]/g, "\\.")}`),
+  );
+  assert.match(
+    csp,
+    new RegExp(`connect-src [^;]*${sourcesOrigin.replace(/[.]/g, "\\.")}`),
+  );
 });
 
 test("service worker helper caches only public assets", async () => {

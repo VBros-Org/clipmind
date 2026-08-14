@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
+import type { PrismaClient } from "@prisma/client";
 
 import { prisma } from "../lib/db";
 import { cookieHeaderForAccessCode } from "../lib/review-auth";
@@ -222,8 +223,59 @@ test("recent uploads endpoint is creator scoped and no-store", async () => {
     assert.equal(body.uploads.length, 1);
     assert.equal(body.uploads[0]?.id, video.id);
     assert.equal(body.uploads[0]?.pipelineStage, "failed");
-    assert.equal(body.uploads[0]?.pipelineError, "transcribing: Whisper timeout");
+    assert.equal(body.uploads[0]?.pipelineError, "transcribing: Transcription failed.");
     assert.equal(body.uploads[0]?.clipCount, 0);
+
+    const dbVideo = await prisma.video.findUniqueOrThrow({
+      where: {
+        id: video.id,
+      },
+      select: {
+        pipelineError: true,
+      },
+    });
+    assert.equal(dbVideo.pipelineError, "transcribing: Whisper timeout");
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("status endpoint maps raw pipeline errors to user-safe labels", async () => {
+  const fixture = await createFixture();
+
+  try {
+    const video = await createVideo(fixture, {
+      pipelineStage: "failed",
+      pipelineError: "captions: raw Mind content: <stack and prompt excerpt>",
+      clipCount: 0,
+    });
+    fixture.videoId = video.id;
+
+    const response = await handleGetVideoStatus(
+      requestWithCode(video.id, fixture.creatorACode),
+      { id: video.id },
+    );
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      stage: "failed",
+      error: "captions: Caption writing failed.",
+      failedStage: "captions",
+      clipCount: 0,
+    });
+
+    const dbVideo = await prisma.video.findUniqueOrThrow({
+      where: {
+        id: video.id,
+      },
+      select: {
+        pipelineError: true,
+      },
+    });
+    assert.equal(
+      dbVideo.pipelineError,
+      "captions: raw Mind content: <stack and prompt excerpt>",
+    );
   } finally {
     await cleanupFixture(fixture);
   }
@@ -707,6 +759,102 @@ test("delete video returns posted guard and does not delete storage or rows", as
   }
 });
 
+test("delete video rechecks posted guard inside the transaction before storage deletes", async () => {
+  const fixture = await createFixture();
+  const storageCalls: string[] = [];
+
+  try {
+    const video = await prisma.video.create({
+      data: {
+        creatorId: fixture.creatorAId,
+        contentKey: `delete-race-${Date.now()}`,
+        sourceKey: "videos/delete-race/source.mp4",
+        status: "clipped",
+        pipelineStage: "done",
+      },
+      select: {
+        id: true,
+      },
+    });
+    fixture.videoId = video.id;
+    const clip = await prisma.clip.create({
+      data: {
+        creatorId: fixture.creatorAId,
+        videoId: video.id,
+        startMs: 0,
+        endMs: 8_000,
+        renderedUrl: "https://cdn.example/clips/delete-race.mp4",
+        status: "candidate",
+      },
+      select: {
+        id: true,
+      },
+    });
+    const racingDb = new Proxy(prisma, {
+      get(target, prop, receiver) {
+        if (prop === "$transaction") {
+          return async (callback: (tx: PrismaClient) => Promise<unknown>) => {
+            await prisma.clip.update({
+              where: {
+                id: clip.id,
+              },
+              data: {
+                status: "posted",
+                postedAt: new Date("2026-08-14T10:00:00.000Z"),
+              },
+            });
+            return (
+              prisma.$transaction as unknown as (
+                fn: (tx: PrismaClient) => Promise<unknown>,
+              ) => Promise<unknown>
+            )(callback);
+          };
+        }
+
+        return Reflect.get(target, prop, receiver);
+      },
+    }) as PrismaClient;
+
+    const response = await handleDeleteVideo(
+      requestForPath(`/api/videos/${video.id}`, fixture.creatorACode, "DELETE"),
+      { id: video.id },
+      {
+        prismaClient: racingDb,
+        deleteStorage: {
+          async deleteSource(key) {
+            storageCalls.push(key);
+          },
+          async deleteMediaObject(key) {
+            storageCalls.push(key);
+          },
+        },
+      },
+    );
+
+    assert.equal(response.status, 409);
+    assert.deepEqual(storageCalls, []);
+    assert.equal(
+      await prisma.video.count({
+        where: {
+          id: video.id,
+        },
+      }),
+      1,
+    );
+    assert.equal(
+      await prisma.clip.count({
+        where: {
+          id: clip.id,
+          status: "posted",
+        },
+      }),
+      1,
+    );
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
 test("delete video cascades rows, deletes R2 objects, and clears Home ready rows", async () => {
   const fixture = await createFixture();
   const savedMediaBase = process.env.R2_MEDIA_PUBLIC_BASE;
@@ -868,6 +1016,98 @@ test("delete video cascades rows, deletes R2 objects, and clears Home ready rows
     const afterHome = await loadHomeOverview(fixture.creatorAId);
     assert.equal(afterHome.readyToPost.length, 0);
     assert.equal(afterHome.runway.clipCount, 0);
+  } finally {
+    restoreEnvValue("R2_MEDIA_PUBLIC_BASE", savedMediaBase);
+    await cleanupFixture(fixture);
+  }
+});
+
+test("delete video commits DB rows when post-commit R2 deletion fails", async () => {
+  const fixture = await createFixture();
+  const savedMediaBase = process.env.R2_MEDIA_PUBLIC_BASE;
+  process.env.R2_MEDIA_PUBLIC_BASE = storageEnv.R2_MEDIA_PUBLIC_BASE;
+  const attemptedKeys: string[] = [];
+  const logLines: string[] = [];
+
+  try {
+    const video = await prisma.video.create({
+      data: {
+        creatorId: fixture.creatorAId,
+        contentKey: `delete-r2-failure-${Date.now()}`,
+        sourceKey: "videos/delete-r2-failure/source.mp4",
+        status: "clipped",
+        pipelineStage: "done",
+      },
+      select: {
+        id: true,
+      },
+    });
+    fixture.videoId = video.id;
+    await prisma.clip.create({
+      data: {
+        creatorId: fixture.creatorAId,
+        videoId: video.id,
+        startMs: 0,
+        endMs: 8_000,
+        renderedUrl: "https://cdn.example/clips/delete-r2-failure.mp4",
+        status: "candidate",
+      },
+    });
+
+    const response = await handleDeleteVideo(
+      requestForPath(`/api/videos/${video.id}`, fixture.creatorACode, "DELETE"),
+      { id: video.id },
+      {
+        deleteStorage: {
+          async deleteSource(key) {
+            attemptedKeys.push(key);
+            throw new Error("R2 source unavailable");
+          },
+          async deleteMediaObject(key) {
+            attemptedKeys.push(key);
+            throw new Error("R2 media unavailable");
+          },
+        },
+        deleteLogger: {
+          error(line) {
+            logLines.push(line);
+          },
+        },
+      },
+    );
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      videoId: video.id,
+      deleted: {
+        learningEvents: 0,
+        clips: 1,
+        videos: 1,
+        objects: 2,
+      },
+    });
+    assert.deepEqual(attemptedKeys, [
+      "videos/delete-r2-failure/source.mp4",
+      "clips/delete-r2-failure.mp4",
+    ]);
+    assert.equal(logLines.length, 2);
+    assert.match(logLines[0] ?? "", /Video R2 delete failed/);
+    assert.equal(
+      await prisma.video.count({
+        where: {
+          id: video.id,
+        },
+      }),
+      0,
+    );
+    assert.equal(
+      await prisma.clip.count({
+        where: {
+          videoId: video.id,
+        },
+      }),
+      0,
+    );
   } finally {
     restoreEnvValue("R2_MEDIA_PUBLIC_BASE", savedMediaBase);
     await cleanupFixture(fixture);

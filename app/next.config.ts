@@ -1,5 +1,7 @@
 import type { NextConfig } from "next";
 
+import { buildSecurityHeaders } from "./lib/security-headers";
+
 const nextConfig: NextConfig = {
   devIndicators: false,
   // clipmind.gitm.gg terminates TLS at a Cloudflare Worker and proxies to the
@@ -12,6 +14,14 @@ const nextConfig: NextConfig = {
     serverActions: {
       allowedOrigins: ["clipmind.gitm.gg", "app-production-dd6a.up.railway.app"],
     },
+  },
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: buildSecurityHeaders(),
+      },
+    ];
   },
 };
 
