@@ -445,7 +445,7 @@ def _render_cut_response_file(
             detail="Requested window is outside the source video duration.",
         )
 
-    if cut_request.transcript_payload is None:
+    if _should_transcribe_cut_window(cut_request.transcript_payload):
         transcript_source_path = temp_dir / "transcribe-window.mp4"
         cut_segment_for_transcription(
             cut_request.video_path,
@@ -483,6 +483,10 @@ def _render_cut_response_file(
     )
     validate_rendered_video(output_path, duration_ms)
     return output_path, duration_ms
+
+
+def _should_transcribe_cut_window(transcript_payload: object | None) -> bool:
+    return transcript_payload is None or isinstance(transcript_payload, str)
 
 
 def _render_thumbnail_response_file(

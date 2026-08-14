@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from src import main
 from src.config import reset_settings_cache
-from src.transcribe import Transcript
+from src.transcribe import Transcript, TranscriptSegment, TranscriptWord
 
 AUTH_HEADERS = {"Authorization": "Bearer test-service-token"}
 
@@ -112,6 +112,84 @@ def test_cut_returns_mp4_with_supplied_transcript_without_transcribing(
     assert response.content == b"fake mp4"
     assert response.headers["x-clipmind-duration-ms"] == "30000"
     assert response.headers["x-clipmind-preset-id"] == "clean-bold"
+
+
+def test_cut_retranscribes_legacy_string_transcript_hint(monkeypatch) -> None:
+    reset_settings_cache()
+    transcribe_sources: list[tuple[Path | str, int, int]] = []
+    rendered_transcripts: list[Transcript] = []
+
+    def fake_cut_for_transcription(
+        source_path: Path | str,
+        output_path: Path,
+        start_ms: int,
+        duration_ms: int,
+    ) -> None:
+        transcribe_sources.append((source_path, start_ms, duration_ms))
+        output_path.write_bytes(b"transcription window")
+
+    def fake_transcribe(
+        video_path: Path,
+        api_key: str,
+        work_dir: Path,
+        duration_ms: int,
+    ) -> Transcript:
+        return Transcript(
+            text="Fresh timed words",
+            segments=[
+                TranscriptSegment(
+                    start_ms=0,
+                    end_ms=duration_ms,
+                    text="Fresh timed words",
+                )
+            ],
+            words=[
+                TranscriptWord(start_ms=0, end_ms=500, word="Fresh"),
+                TranscriptWord(start_ms=500, end_ms=1_000, word="timed"),
+                TranscriptWord(start_ms=1_000, end_ms=1_500, word="words"),
+            ],
+        )
+
+    def fake_render(
+        source_path: Path | str,
+        output_path: Path,
+        transcript: Transcript,
+        preset: object,
+        start_ms: int,
+        duration_ms: int,
+        work_dir: Path,
+    ) -> None:
+        rendered_transcripts.append(transcript)
+        output_path.write_bytes(b"fake mp4")
+
+    monkeypatch.setattr(main, "probe_video_duration_ms", lambda video_path: 50_000)
+    monkeypatch.setattr(
+        main,
+        "cut_segment_for_transcription",
+        fake_cut_for_transcription,
+    )
+    monkeypatch.setattr(main, "transcribe_video", fake_transcribe)
+    monkeypatch.setattr(main, "render_cut_with_subtitles", fake_render)
+    monkeypatch.setattr(main, "validate_rendered_video", lambda path, duration_ms: None)
+
+    client = TestClient(main.app)
+    response = client.post(
+        "/cut",
+        headers=AUTH_HEADERS,
+        json={
+            "source_url": "https://storage.example/source.mp4",
+            "start_ms": 5_000,
+            "end_ms": 35_000,
+            "preset_id": "karaoke",
+            "transcript": "Legacy text hint only.",
+        },
+    )
+
+    assert response.status_code == 200
+    assert transcribe_sources == [
+        ("https://storage.example/source.mp4", 5_000, 30_000)
+    ]
+    assert rendered_transcripts[0].text == "Fresh timed words"
 
 
 def test_cut_uses_source_url_directly_for_range_render(monkeypatch) -> None:

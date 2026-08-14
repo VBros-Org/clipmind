@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from src import candidates
-from src.transcribe import Transcript, TranscriptSegment
+from src.transcribe import Transcript, TranscriptSegment, TranscriptWord
 
 
 def test_hook_heuristic_flags_questions_exclamations_emphasis_and_topic_shifts() -> None:
@@ -79,6 +79,115 @@ def test_under_30s_source_returns_one_whole_source_window(monkeypatch) -> None:
     assert windows[0].end_ms == 25_000
 
 
+def test_candidates_carry_windowed_segments_and_words(monkeypatch) -> None:
+    monkeypatch.setattr(candidates, "audio_energy_anchors", no_audio_anchors)
+    transcript = Transcript(
+        text="Why this timing matters?",
+        segments=[
+            TranscriptSegment(
+                start_ms=10_000,
+                end_ms=15_000,
+                text="Why this timing matters?",
+            ),
+        ],
+        words=[
+            TranscriptWord(start_ms=10_100, end_ms=10_400, word="Why"),
+            TranscriptWord(start_ms=10_400, end_ms=10_800, word="this"),
+        ],
+    )
+
+    windows = candidates.build_candidates(Path("unused.mp4"), transcript, 60_000)
+
+    assert len(windows) == 1
+    assert windows[0].segments == [transcript.segments[0]]
+    assert windows[0].words == transcript.words
+    assert windows[0].to_response()["segments"] == [
+        {
+            "start_ms": 10_000,
+            "end_ms": 15_000,
+            "text": "Why this timing matters?",
+        }
+    ]
+    assert windows[0].to_response()["words"] == [
+        {"start_ms": 10_100, "end_ms": 10_400, "word": "Why"},
+        {"start_ms": 10_400, "end_ms": 10_800, "word": "this"},
+    ]
+
+
+def test_scored_spread_selection_keeps_strong_late_window(monkeypatch) -> None:
+    def late_spike(
+        _video_path: Path,
+        _transcript: Transcript,
+    ) -> list[candidates.CandidateAnchor]:
+        return [
+            candidates.CandidateAnchor(
+                kind="energy",
+                segment_index=0,
+                anchor_ms=110_000,
+                reasons=["audio energy: spike above rolling baseline"],
+                spike_delta_lufs=24.0,
+            )
+        ]
+
+    monkeypatch.setattr(candidates, "audio_energy_anchors", late_spike)
+    transcript = synthetic_monologue(
+        duration_ms=104_000,
+        segment_ms=8_000,
+        hook_starts_ms=set(range(0, 104_000, 8_000)),
+    )
+
+    windows = candidates.build_candidates(Path("unused.mp4"), transcript, 140_000)
+
+    assert len(windows) == candidates.MAX_CANDIDATES
+    assert any(window.anchor_ms == 110_000 for window in windows)
+    assert max(window.anchor_ms for window in windows) == 110_000
+    assert [window.anchor_ms for window in windows] != list(
+        range(0, candidates.MAX_CANDIDATES * 8_000, 8_000)
+    )
+
+
+def test_spike_without_transcript_segment_produces_candidate(monkeypatch) -> None:
+    monkeypatch.setattr(
+        candidates,
+        "loudness_samples",
+        lambda _video_path: loudness_fixture_with_spike(3_000),
+    )
+
+    windows = candidates.build_candidates(
+        Path("unused.mp4"),
+        Transcript(text="", segments=[], words=[]),
+        60_000,
+    )
+
+    assert len(windows) == 1
+    assert windows[0].anchor_kind == "energy"
+    assert windows[0].start_ms == 3_000
+    assert windows[0].end_ms == 23_000
+    assert windows[0].transcript == ""
+
+
+def test_spike_between_segments_anchors_to_spike_not_following_segment(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        candidates,
+        "loudness_samples",
+        lambda _video_path: loudness_fixture_with_spike(5_000),
+    )
+    transcript = transcript_from_segments(
+        [
+            TranscriptSegment(0, 1_000, "The setup is calm."),
+            TranscriptSegment(10_000, 12_000, "The reaction lands later."),
+        ]
+    )
+
+    windows = candidates.build_candidates(Path("unused.mp4"), transcript, 60_000)
+
+    assert len(windows) == 1
+    assert windows[0].anchor_kind == "energy"
+    assert windows[0].start_ms == 5_000
+
+
 def test_iou_dedupe_keeps_stronger_anchor() -> None:
     deduped = candidates.dedupe_overlapping_windows(
         [
@@ -139,6 +248,17 @@ def no_audio_anchors(
     _transcript: Transcript,
 ) -> list[candidates.CandidateAnchor]:
     return []
+
+
+def loudness_fixture_with_spike(spike_ms: int) -> list[candidates.LoudnessSample]:
+    baseline_times = range(max(0, spike_ms - 3_000), spike_ms, 500)
+    return [
+        *[
+            candidates.LoudnessSample(time_ms=time_ms, momentary_lufs=-50.0)
+            for time_ms in baseline_times
+        ],
+        candidates.LoudnessSample(time_ms=spike_ms, momentary_lufs=-30.0),
+    ]
 
 
 def synthetic_monologue(

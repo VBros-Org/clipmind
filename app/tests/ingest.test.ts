@@ -4,11 +4,59 @@ import os from "node:os";
 import path from "node:path";
 
 import type { ClipServiceClient } from "../lib/ingest";
-import { ingestVideo } from "../lib/ingest";
+import { ingestVideo, parseClipServiceResponse } from "../lib/ingest";
 import { prisma } from "../lib/db";
 import type { R2Storage } from "../lib/storage";
 
 async function main() {
+  assert.deepEqual(
+    parseClipServiceResponse({
+      candidates: [
+        {
+          start_ms: 1_000,
+          end_ms: 12_000,
+          transcript: "Why this opening works.",
+          segments: [
+            {
+              start_ms: 1_000,
+              end_ms: 3_000,
+              text: "Why this opening works.",
+            },
+          ],
+          words: [
+            { start_ms: 1_000, end_ms: 1_300, word: "Why" },
+            { start_ms: 1_300, end_ms: 1_700, word: "this" },
+          ],
+          reasons: ["transcript hook: question"],
+        },
+      ],
+    }),
+    {
+      candidates: [
+        {
+          startMs: 1_000,
+          endMs: 12_000,
+          transcript: "Why this opening works.",
+          transcriptTiming: {
+            text: "Why this opening works.",
+            segments: [
+              {
+                start_ms: 1_000,
+                end_ms: 3_000,
+                text: "Why this opening works.",
+              },
+            ],
+            words: [
+              { start_ms: 1_000, end_ms: 1_300, word: "Why" },
+              { start_ms: 1_300, end_ms: 1_700, word: "this" },
+            ],
+          },
+          reasons: ["transcript hook: question"],
+        },
+      ],
+    },
+  );
+
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "clipmind-ingest-test-"));
   const videoPath = path.join(tempDir, "sample.mp4");
   const marker = `ingest-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -69,12 +117,40 @@ async function main() {
               startMs: 1_000,
               endMs: 12_000,
               transcript: "Why this opening works.",
+              transcriptTiming: {
+                text: "Why this opening works.",
+                segments: [
+                  {
+                    start_ms: 1_000,
+                    end_ms: 3_000,
+                    text: "Why this opening works.",
+                  },
+                ],
+                words: [
+                  { start_ms: 1_000, end_ms: 1_300, word: "Why" },
+                  { start_ms: 1_300, end_ms: 1_700, word: "this" },
+                ],
+              },
               reasons: ["transcript hook: question"],
             },
             {
               startMs: 20_000,
               endMs: 42_000,
               transcript: "Wait for the turn here.",
+              transcriptTiming: {
+                text: "Wait for the turn here.",
+                segments: [
+                  {
+                    start_ms: 20_000,
+                    end_ms: 24_000,
+                    text: "Wait for the turn here.",
+                  },
+                ],
+                words: [
+                  { start_ms: 20_000, end_ms: 20_400, word: "Wait" },
+                  { start_ms: 20_400, end_ms: 20_700, word: "for" },
+                ],
+              },
               reasons: [
                 "transcript hook: emphasis",
                 "audio energy: spike above rolling baseline",
@@ -129,10 +205,38 @@ async function main() {
     assert.equal(video.clips[0].endMs, 12_000);
     assert.equal(video.clips[0].status, "candidate");
     assert.equal(video.clips[0].transcript, "Why this opening works.");
+    assert.deepEqual(video.clips[0].transcriptTiming, {
+      text: "Why this opening works.",
+      segments: [
+        {
+          start_ms: 1_000,
+          end_ms: 3_000,
+          text: "Why this opening works.",
+        },
+      ],
+      words: [
+        { start_ms: 1_000, end_ms: 1_300, word: "Why" },
+        { start_ms: 1_300, end_ms: 1_700, word: "this" },
+      ],
+    });
     assert.deepEqual(video.clips[0].reasons, ["transcript hook: question"]);
     assert.equal(video.clips[1].startMs, 20_000);
     assert.equal(video.clips[1].endMs, 42_000);
     assert.equal(video.clips[1].transcript, "Wait for the turn here.");
+    assert.deepEqual(video.clips[1].transcriptTiming, {
+      text: "Wait for the turn here.",
+      segments: [
+        {
+          start_ms: 20_000,
+          end_ms: 24_000,
+          text: "Wait for the turn here.",
+        },
+      ],
+      words: [
+        { start_ms: 20_000, end_ms: 20_400, word: "Wait" },
+        { start_ms: 20_400, end_ms: 20_700, word: "for" },
+      ],
+    });
     assert.deepEqual(video.clips[1].reasons, [
       "transcript hook: emphasis",
       "audio energy: spike above rolling baseline",

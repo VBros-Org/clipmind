@@ -39,6 +39,7 @@ export type ClipServiceCandidate = {
   startMs: number;
   endMs: number;
   transcript: string | null;
+  transcriptTiming?: Prisma.JsonValue | null;
   reasons: Prisma.JsonValue | null;
 };
 
@@ -334,6 +335,8 @@ async function writeCandidateClips(
           startMs: candidate.startMs,
           endMs: candidate.endMs,
           transcript: candidate.transcript,
+          transcriptTiming:
+            candidate.transcriptTiming === null ? undefined : candidate.transcriptTiming,
           reasons: candidate.reasons === null ? undefined : candidate.reasons,
           status: "candidate",
         },
@@ -388,7 +391,9 @@ function clipServiceEndpoint(): URL {
   return new URL("candidates", base);
 }
 
-function parseClipServiceResponse(payload: unknown): ClipServiceCandidateResponse {
+export function parseClipServiceResponse(
+  payload: unknown,
+): ClipServiceCandidateResponse {
   if (!isRecord(payload) || !Array.isArray(payload.candidates)) {
     throw new Error("Clip service response must include a candidates array.");
   }
@@ -414,8 +419,107 @@ function parseClipServiceCandidate(payload: unknown): ClipServiceCandidate {
     startMs,
     endMs,
     transcript: typeof payload.transcript === "string" ? payload.transcript : null,
+    transcriptTiming: parseCandidateTranscriptTiming(payload),
     reasons: toJsonValue(payload.reasons),
   };
+}
+
+function parseCandidateTranscriptTiming(
+  payload: Record<string, unknown>,
+): Prisma.JsonValue | null {
+  const segments = optionalArrayField(payload, "segments").map(parseTranscriptSegment);
+  const words = optionalArrayField(payload, "words").map(parseTranscriptWord);
+
+  if (segments.length === 0 && words.length === 0) {
+    return null;
+  }
+
+  const text =
+    typeof payload.transcript === "string"
+      ? payload.transcript
+      : typeof payload.text === "string"
+      ? payload.text
+      : transcriptTextFromTiming(segments, words);
+
+  return toJsonValue({
+    text,
+    segments,
+    words,
+  });
+}
+
+function parseTranscriptSegment(value: unknown) {
+  if (!isRecord(value)) {
+    throw new Error("Clip service candidate segment must be an object.");
+  }
+
+  const startMs = readRequiredInteger(value, "start_ms", "startMs");
+  const endMs = readRequiredInteger(value, "end_ms", "endMs");
+  const text = value.text;
+  if (typeof text !== "string") {
+    throw new Error("Clip service candidate segment text must be a string.");
+  }
+  if (endMs < startMs) {
+    throw new Error(`Invalid clip candidate segment window ${startMs}-${endMs}.`);
+  }
+
+  return {
+    start_ms: startMs,
+    end_ms: endMs,
+    text,
+  };
+}
+
+function parseTranscriptWord(value: unknown) {
+  if (!isRecord(value)) {
+    throw new Error("Clip service candidate word must be an object.");
+  }
+
+  const startMs = readRequiredInteger(value, "start_ms", "startMs");
+  const endMs = readRequiredInteger(value, "end_ms", "endMs");
+  const word = value.word;
+  if (typeof word !== "string") {
+    throw new Error("Clip service candidate word must be a string.");
+  }
+  if (endMs <= startMs) {
+    throw new Error(`Invalid clip candidate word window ${startMs}-${endMs}.`);
+  }
+
+  return {
+    start_ms: startMs,
+    end_ms: endMs,
+    word,
+  };
+}
+
+function optionalArrayField(
+  payload: Record<string, unknown>,
+  key: string,
+): unknown[] {
+  const value = payload[key];
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`Clip service candidate field ${key} must be an array.`);
+  }
+  return value;
+}
+
+function transcriptTextFromTiming(
+  segments: readonly { text: string }[],
+  words: readonly { word: string }[],
+): string {
+  const segmentText = segments.map((segment) => segment.text).join(" ").trim();
+  if (segmentText) {
+    return segmentText.replace(/\s+/g, " ");
+  }
+
+  return words
+    .map((word) => word.word)
+    .join(" ")
+    .trim()
+    .replace(/\s+/g, " ");
 }
 
 function readRequiredInteger(
