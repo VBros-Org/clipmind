@@ -65,6 +65,8 @@ function serializeClip(clip: ReviewVideoGroup["clips"][number]): ReviewClipView 
     startMs: clip.startMs,
     endMs: clip.endMs,
     renderedUrl: clip.renderedUrl,
+    renderFailedAt: clip.renderFailedAt?.toISOString() ?? null,
+    renderError: clip.renderError,
     thumbUrl: clip.thumbUrl,
     postCopyVariants: clip.postCopyVariants,
     transcript: clip.transcript,

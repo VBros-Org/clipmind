@@ -2,7 +2,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 
 import { prisma } from "./db";
 import { isRejectReason, type RejectReason } from "./reject-reasons";
-import { renderClip } from "./render";
+import { markClipRenderFailed, renderClip } from "./render";
 import {
   assertClipStatusTransition,
   toClipSchedulingStatus,
@@ -38,6 +38,8 @@ export type ReviewClip = {
   startMs: number;
   endMs: number;
   renderedUrl: string | null;
+  renderFailedAt: Date | null;
+  renderError: string | null;
   thumbUrl: string | null;
   postCopyVariants: PostCopyVariants | null;
   transcript: string | null;
@@ -166,6 +168,8 @@ export async function loadReviewVideo(
           startMs: true,
           endMs: true,
           renderedUrl: true,
+          renderFailedAt: true,
+          renderError: true,
           thumbKey: true,
           postCopyVariants: true,
           transcript: true,
@@ -275,6 +279,8 @@ export async function loadReviewClip(
       startMs: true,
       endMs: true,
       renderedUrl: true,
+      renderFailedAt: true,
+      renderError: true,
       thumbKey: true,
       postCopyVariants: true,
       transcript: true,
@@ -512,12 +518,94 @@ export async function setClipRejectReasonForReview(
   });
 }
 
+export async function retryRenderForReview(
+  creatorId: string,
+  clipId: string,
+  options: ReviewRepositoryOptions = {},
+): Promise<ReviewTransitionResult | null> {
+  const db = options.prismaClient ?? prisma;
+
+  return db.$transaction(async (tx) => {
+    const clip = await tx.clip.findFirst({
+      where: {
+        id: clipId,
+        creatorId,
+      },
+      select: {
+        id: true,
+        status: true,
+        renderedUrl: true,
+        renderFailedAt: true,
+        creator: {
+          select: {
+            captionStyle: true,
+          },
+        },
+      },
+    });
+
+    if (!clip) {
+      return null;
+    }
+
+    const status = toClipSchedulingStatus(clip.status);
+    if (status !== "accepted" && status !== "scheduled") {
+      throw new RenderRetryStatusError(
+        clip.id,
+        `Clip ${clip.id} is ${status}, so it cannot retry rendering.`,
+      );
+    }
+    if (clip.renderedUrl) {
+      throw new RenderRetryStatusError(
+        clip.id,
+        `Clip ${clip.id} already has a rendered clip.`,
+      );
+    }
+    if (!clip.renderFailedAt) {
+      throw new RenderRetryStatusError(
+        clip.id,
+        `Clip ${clip.id} has no failed render to retry.`,
+      );
+    }
+
+    await tx.clip.update({
+      where: {
+        id: clip.id,
+      },
+      data: {
+        renderFailedAt: null,
+        renderError: null,
+      },
+    });
+
+    const updated = await tx.clip.findUniqueOrThrow({
+      where: {
+        id: clip.id,
+      },
+      select: reviewClipSelect,
+    });
+
+    return {
+      clip: toReviewClip(updated),
+      presetId: captionPresetFromStyle(clip.creator.captionStyle),
+    };
+  });
+}
+
 export function startRenderAfterAccept(
   clipId: string,
   presetId: string,
   renderClipImpl: RenderClipImpl = renderClip,
+  options: ReviewRepositoryOptions = {},
 ): void {
   void renderClipImpl(clipId, presetId).catch((error: unknown) => {
+    void markClipRenderFailed(clipId, error, {
+      prismaClient: options.prismaClient,
+    }).catch((writeError: unknown) => {
+      console.error(
+        `Review render failure write failed for clip ${clipId}: ${errorMessage(writeError)}`,
+      );
+    });
     console.error(
       `Review render failed for clip ${clipId}: ${errorMessage(error)}`,
     );
@@ -542,6 +630,8 @@ const reviewClipSelect = {
   startMs: true,
   endMs: true,
   renderedUrl: true,
+  renderFailedAt: true,
+  renderError: true,
   thumbKey: true,
   postCopyVariants: true,
   transcript: true,
@@ -558,6 +648,8 @@ function toReviewClip(clip: {
   startMs: number;
   endMs: number;
   renderedUrl: string | null;
+  renderFailedAt: Date | null;
+  renderError: string | null;
   thumbKey: string | null;
   postCopyVariants: Prisma.JsonValue;
   transcript: string | null;
@@ -573,6 +665,8 @@ function toReviewClip(clip: {
     startMs: clip.startMs,
     endMs: clip.endMs,
     renderedUrl: clip.renderedUrl,
+    renderFailedAt: clip.renderFailedAt,
+    renderError: clip.renderError,
     thumbUrl: publicMediaUrlForKey(clip.thumbKey),
     postCopyVariants: toPostCopyVariants(clip.postCopyVariants),
     transcript: clip.transcript,
@@ -641,6 +735,8 @@ function toReviewVideoGroup(video: {
     startMs: number;
     endMs: number;
     renderedUrl: string | null;
+    renderFailedAt: Date | null;
+    renderError: string | null;
     thumbKey: string | null;
     postCopyVariants: Prisma.JsonValue;
     transcript: string | null;
@@ -682,6 +778,15 @@ function isRecord(value: Prisma.JsonValue): value is Record<string, Prisma.JsonV
 export class RejectReasonStatusError extends Error {
   constructor(clipId: string, status: string) {
     super(`Clip ${clipId} is ${status}, so it cannot store a reject reason.`);
+  }
+}
+
+export class RenderRetryStatusError extends Error {
+  constructor(
+    readonly clipId: string,
+    message: string,
+  ) {
+    super(message);
   }
 }
 

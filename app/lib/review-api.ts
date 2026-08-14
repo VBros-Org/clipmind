@@ -3,13 +3,19 @@ import type { PrismaClient } from "@prisma/client";
 import { countPostedThisWeek } from "./posting-stats";
 import { loadCreatorSessionFromCookieHeader } from "./review-auth";
 import {
+  captionClip,
+  type CaptionClipOptions,
+} from "./captioning";
+import {
   acceptClipForReview,
   loadClipPreview,
   loadReviewClip,
   rejectClipForReview,
+  retryRenderForReview,
   setClipRejectReasonForReview,
   startRenderAfterAccept,
   RejectReasonStatusError,
+  RenderRetryStatusError,
 } from "./review";
 import { isRejectReason } from "./reject-reasons";
 import type { renderClip } from "./render";
@@ -26,6 +32,7 @@ type RouteParams = { id: string } | Promise<{ id: string }>;
 type ReviewApiOptions = {
   prismaClient?: PrismaClient;
   renderClipImpl?: typeof renderClip;
+  captionOptions?: Omit<CaptionClipOptions, "prismaClient">;
   triggerTasteFeedbackSyncImpl?: TriggerTasteFeedbackSyncImpl;
   now?: Date;
   storage?: Pick<R2Storage, "presignSourceUrl">;
@@ -96,6 +103,21 @@ export async function handleAcceptClip(
       return json({ error: "Clip not found." }, 404);
     }
 
+    if (!result.clip.postCopyVariants) {
+      const captionResult = await captionClip(result.clip.id, {
+        ...options.captionOptions,
+        prismaClient: options.prismaClient,
+      });
+      if (captionResult.status !== "captioned") {
+        return json(
+          {
+            error: `Clip caption failed: ${captionResult.reason}.`,
+          },
+          502,
+        );
+      }
+    }
+
     const schedulePass = await runSchedulePass(session.creatorId, new Date(), {
       prismaClient: options.prismaClient,
     });
@@ -109,6 +131,9 @@ export async function handleAcceptClip(
       result.clip.id,
       result.presetId,
       options.renderClipImpl,
+      {
+        prismaClient: options.prismaClient,
+      },
     );
     startTasteFeedbackAfterVerdict(session.creatorId, options);
 
@@ -121,6 +146,51 @@ export async function handleAcceptClip(
       200,
     );
   } catch (error) {
+    return transitionErrorResponse(error);
+  }
+}
+
+export async function handleRetryClipRender(
+  request: Request,
+  params: RouteParams,
+  options: ReviewApiOptions = {},
+): Promise<Response> {
+  const session = await loadCreatorSession(request, options);
+  if (!session) {
+    return json({ error: "Login required." }, 401);
+  }
+
+  try {
+    const result = await retryRenderForReview(
+      session.creatorId,
+      await clipId(params),
+      options,
+    );
+    if (!result) {
+      return json({ error: "Clip not found." }, 404);
+    }
+
+    startRenderAfterAccept(
+      result.clip.id,
+      result.presetId,
+      options.renderClipImpl,
+      {
+        prismaClient: options.prismaClient,
+      },
+    );
+
+    return json(
+      {
+        clip: serializeClip(result.clip),
+        rendering: true,
+      },
+      200,
+    );
+  } catch (error) {
+    if (error instanceof RenderRetryStatusError) {
+      return json({ error: error.message }, 409);
+    }
+
     return transitionErrorResponse(error);
   }
 }
@@ -312,6 +382,8 @@ function serializeClip(clip: {
   startMs: number;
   endMs: number;
   renderedUrl: string | null;
+  renderFailedAt: Date | null;
+  renderError: string | null;
   thumbUrl: string | null;
   postCopyVariants: unknown;
   transcript: string | null;
@@ -327,6 +399,8 @@ function serializeClip(clip: {
     startMs: clip.startMs,
     endMs: clip.endMs,
     renderedUrl: clip.renderedUrl,
+    renderFailedAt: clip.renderFailedAt?.toISOString() ?? null,
+    renderError: clip.renderError,
     thumbUrl: clip.thumbUrl,
     postCopyVariants: clip.postCopyVariants,
     transcript: clip.transcript,

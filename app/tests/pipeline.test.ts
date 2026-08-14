@@ -98,6 +98,7 @@ test("runPipeline triggers scheduling and taste feedback after the pipeline reac
     ]),
     captionReply("First top clip"),
     captionReply("Second top clip"),
+    captionReply("Accepted clip"),
   ]);
   const tasteSyncCalls: string[] = [];
 
@@ -153,10 +154,16 @@ test("runPipeline triggers scheduling and taste feedback after the pipeline reac
       select: {
         status: true,
         scheduledFor: true,
+        postCopyVariants: true,
       },
     });
     assert.equal(scheduledClip.status, "scheduled");
     assert.ok(scheduledClip.scheduledFor);
+    assert.deepEqual(scheduledClip.postCopyVariants, {
+      youtube: "Accepted clip title",
+      tiktok: "Accepted clip for TikTok #clipmind",
+      instagram: "Accepted clip on Instagram.\nExtra context here\n\n#clipmind",
+    });
   } finally {
     await cleanupFixture(fixture);
   }
