@@ -1,7 +1,11 @@
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { loginCreatorWithAccessCode } from "../../../lib/login";
+import {
+  consumeLoginAttempt,
+  loginRateLimitKey,
+} from "../../../lib/rate-limit";
 import {
   CREATOR_ACCESS_COOKIE,
   CREATOR_ACCESS_COOKIE_MAX_AGE_SECONDS,
@@ -50,6 +54,14 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
 async function loginCreator(formData: FormData) {
   "use server";
+
+  const headerStore = await headers();
+  const limit = consumeLoginAttempt(
+    loginRateLimitKey(headerStore.get("x-forwarded-for")),
+  );
+  if (!limit.allowed) {
+    redirect("/login?error=1");
+  }
 
   const accessCode = String(formData.get("accessCode") ?? "");
   const timezone = String(formData.get("timezone") ?? "");

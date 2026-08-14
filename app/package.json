@@ -48,7 +48,7 @@
     "mint:invite": "tsc -p tsconfig.scripts.json && node --env-file=.env dist/scripts/mint-invite.js",
     "pretest:ranking": "prisma generate",
     "test:ranking": "tsc -p tsconfig.scripts.json && node --test dist/tests/ranking.test.js",
-    "test:pwa": "tsc -p tsconfig.scripts.json && node --test dist/tests/pwa.test.js dist/tests/session-api.test.js dist/tests/video-label.test.js dist/tests/upload-status-client.test.js dist/tests/screen-wake-lock.test.js dist/tests/share-prepared-video.test.js dist/tests/upload-transfer-state.test.js dist/tests/upload-multipart-client.test.js dist/tests/review-polish.test.js",
+    "test:pwa": "tsc -p tsconfig.scripts.json && node --test dist/tests/pwa.test.js dist/tests/session-api.test.js dist/tests/video-label.test.js dist/tests/upload-status-client.test.js dist/tests/screen-wake-lock.test.js dist/tests/share-prepared-video.test.js dist/tests/upload-transfer-state.test.js dist/tests/upload-multipart-client.test.js dist/tests/review-polish.test.js dist/tests/rate-limit.test.js",
     "pretest:captioning": "prisma generate",
     "test:captioning": "tsc -p tsconfig.scripts.json && node --test dist/tests/captioning.test.js",
     "pretest:taste": "prisma generate",
