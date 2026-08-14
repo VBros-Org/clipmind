@@ -38,7 +38,6 @@ export function VoiceCard({
   initialCaptionCount,
   initialChannelUrl,
   initialChannelPullStatus,
-  hasMind,
 }: VoiceCardProps) {
   const router = useRouter();
   const [captionCorpus, setCaptionCorpus] = useState(initialCaptionCorpus);
@@ -221,7 +220,7 @@ export function VoiceCard({
         <button
           className={styles.teachButton}
           data-testid="teach-voice-button"
-          disabled={!hasMind || saveState === "teaching"}
+          disabled={saveState === "teaching"}
           onClick={teachMind}
           type="button"
         >

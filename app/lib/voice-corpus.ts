@@ -7,6 +7,7 @@ import {
   createMindsClientFromEnv,
   type MindsClient,
 } from "./minds";
+import { ensureCreatorMind } from "./mind-provisioning";
 import { seedCreatorTenets } from "./onboarding";
 import { createOpenAITenetDistiller } from "./openai-distill";
 import {
@@ -16,6 +17,8 @@ import {
 } from "./prompts/voice-distill";
 import { loadCreatorSessionFromCookieHeader } from "./review-auth";
 import type { InitialTenets } from "./tenets";
+import { parseTranscript } from "./transcript";
+import { newWorkflowRunId } from "./workflow-lease";
 
 export type VoiceCorpusOptions = {
   prismaClient?: PrismaClient;
@@ -25,6 +28,8 @@ export type VoiceCorpusOptions = {
     evidence?: VoiceDistillEvidence,
   ) => Promise<InitialTenets>;
   now?: Date;
+  adoptionPollMs?: number;
+  maxAdoptionWaitMs?: number;
 };
 
 export type VoiceCorpusResult = {
@@ -136,21 +141,7 @@ export async function teachCreatorVoiceFromCaptionCorpus(
       prismaClient: db,
     },
   );
-  const [creator, transcripts] = await Promise.all([
-    db.creator.findUniqueOrThrow({
-      where: {
-        id: creatorId,
-      },
-      select: {
-        mindId: true,
-      },
-    }),
-    loadCreatorTranscriptEvidence(db, creatorId),
-  ]);
-  const mindId = creator.mindId?.trim();
-  if (!mindId) {
-    throw new VoiceCorpusApiError(409, "Mind is not ready.");
-  }
+  const transcripts = await loadCreatorTranscriptEvidence(db, creatorId);
   if (transcripts.length === 0 && !normalized.captionCorpus) {
     throw new VoiceCorpusApiError(
       400,
@@ -169,10 +160,20 @@ export async function teachCreatorVoiceFromCaptionCorpus(
       `${MINDS_BUILDER_API_KEY_ENV} is required to teach your Mind.`,
     );
   }
+  const mind = await ensureCreatorMind({
+    db,
+    creatorId,
+    runId: newWorkflowRunId("voice-corpus"),
+    workflowName: "Voice corpus",
+    mindsClient,
+    now: options.now,
+    adoptionPollMs: options.adoptionPollMs,
+    maxAdoptionWaitMs: options.maxAdoptionWaitMs,
+  });
 
   const now = options.now ?? new Date();
   assertValidDate(now, "now");
-  const confirmation = await seedCreatorTenets(mindsClient, mindId, tenets, {
+  const confirmation = await seedCreatorTenets(mindsClient, mind.mindId, tenets, {
     alias: buildVoiceReseedAlias(creatorId, now),
     action: "Voice corpus Tenet seed",
   });
@@ -184,6 +185,7 @@ export async function teachCreatorVoiceFromCaptionCorpus(
     data: {
       captionCorpus: normalized.captionCorpus,
       initialTenets: tenets as unknown as Prisma.InputJsonValue,
+      mindId: mind.mindId,
       mindStage: "ready",
       mindError: null,
     },
@@ -193,7 +195,7 @@ export async function teachCreatorVoiceFromCaptionCorpus(
     creatorId,
     captionCorpus: normalized.captionCorpus,
     captionCount: normalized.captionCount,
-    mindId,
+    mindId: mind.mindId,
     tenets,
     confirmation,
   };
@@ -215,8 +217,8 @@ export function loadCreatorTranscriptEvidence(
   db: PrismaClient,
   creatorId: string,
 ): Promise<WeightedTranscript[]> {
-  return db.clip
-    .findMany({
+  return Promise.all([
+    db.clip.findMany({
       where: {
         creatorId,
         transcript: {
@@ -239,31 +241,57 @@ export function loadCreatorTranscriptEvidence(
         endMs: true,
         transcript: true,
       },
-    })
-    .then((clips) =>
-      clips.map((clip) => {
-        const approved = isCreatorApprovedStatus(clip.status);
-        const sourceType = approved ? "existing_clip" : "source_video";
-        const transcriptText = clip.transcript ?? "";
+    }),
+    db.channelPullTranscript.findMany({
+      where: {
+        creatorId,
+      },
+      orderBy: [
+        {
+          createdAt: "desc",
+        },
+        {
+          id: "asc",
+        },
+      ],
+      take: 20,
+      select: {
+        videoId: true,
+        transcript: true,
+      },
+    }),
+  ]).then(([clips, channelPullTranscripts]) => [
+    ...clips.map((clip) => {
+      const approved = isCreatorApprovedStatus(clip.status);
+      const sourceType = approved
+        ? ("existing_clip" as const)
+        : ("source_video" as const);
+      const transcriptText = clip.transcript ?? "";
 
-        return {
-          source: `clip:${clip.id}`,
-          sourceType,
-          weight: CORPUS_WEIGHTS[sourceType],
-          transcript: {
-            text: transcriptText,
-            segments: [
-              {
-                start_ms: clip.startMs,
-                end_ms: clip.endMs,
-                text: transcriptText,
-              },
-            ],
-            words: [],
-          },
-        };
-      }),
-    );
+      return {
+        source: `clip:${clip.id}`,
+        sourceType,
+        weight: CORPUS_WEIGHTS[sourceType],
+        transcript: {
+          text: transcriptText,
+          segments: [
+            {
+              start_ms: clip.startMs,
+              end_ms: clip.endMs,
+              text: transcriptText,
+            },
+          ],
+          words: [],
+        },
+      };
+    }),
+    ...channelPullTranscripts.map((item) => ({
+      source: `youtube:${item.videoId}`,
+      sourceType: "source_video" as const,
+      weight: CORPUS_WEIGHTS.source_video,
+      transcript: parseTranscript(item.transcript),
+    })),
+  ]);
 }
 
 function isCreatorApprovedStatus(status: string): boolean {

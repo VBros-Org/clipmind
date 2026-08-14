@@ -21,11 +21,8 @@ import {
   createMindsClientFromEnv,
   type MindsClient,
 } from "./minds";
-import {
-  DEFAULT_CREATOR_STEWARD_EMAIL,
-  createCreatorMind,
-  seedCreatorTenets,
-} from "./onboarding";
+import { ensureCreatorMind } from "./mind-provisioning";
+import { seedCreatorTenets } from "./onboarding";
 import { createOpenAITenetDistiller } from "./openai-distill";
 import {
   CORPUS_WEIGHTS,
@@ -34,7 +31,7 @@ import {
 } from "./prompts/voice-distill";
 import { loadCreatorSessionFromCookieHeader } from "./review-auth";
 import type { InitialTenets } from "./tenets";
-import type { Transcript } from "./transcript";
+import { parseTranscript, type Transcript } from "./transcript";
 import { loadCreatorTranscriptEvidence } from "./voice-corpus";
 import {
   WorkflowLeaseLostError,
@@ -79,6 +76,8 @@ export type ChannelPullOptions = {
   mindsClient?: MindsClient | null;
   now?: Date;
   heartbeatIntervalMs?: number;
+  adoptionPollMs?: number;
+  maxAdoptionWaitMs?: number;
   stewardEmail?: string;
   channelUrl?: string;
   onStageChange?: (stage: ChannelPullStage) => void | Promise<void>;
@@ -164,6 +163,16 @@ export async function pullChannelVoice(
       await setChannelPullStage(db, creatorId, activeStage, options, {
         runId,
       });
+      const persistedTranscript = await loadChannelPullTranscriptEvidence(
+        db,
+        creatorId,
+        video,
+      );
+      if (persistedTranscript) {
+        channelTranscripts.push(persistedTranscript);
+        continue;
+      }
+
       const transcript = await withWorkflowHeartbeat(
         () => heartbeatChannelPullRun(db, creatorId, runId, options),
         () =>
@@ -173,6 +182,7 @@ export async function pullChannelVoice(
           ),
         options.heartbeatIntervalMs,
       );
+      await storeChannelPullTranscript(db, creatorId, video, transcript);
       channelTranscripts.push(channelTranscriptEvidence(video, transcript));
     }
 
@@ -187,7 +197,6 @@ export async function pullChannelVoice(
         },
         select: {
           captionCorpus: true,
-          mindId: true,
         },
       }),
       loadCreatorTranscriptEvidence(db, creatorId),
@@ -217,35 +226,21 @@ export async function pullChannelVoice(
     const mindsClient = requireMindsClient(options.mindsClient);
     const now = options.now ?? new Date();
     assertValidDate(now, "now");
-    let mindId = freshCreator.mindId?.trim() || null;
-    let mindEmail: string | null = null;
-    if (!mindId) {
-      const mind = await withWorkflowHeartbeat(
-        () => heartbeatChannelPullRun(db, creatorId, runId, options),
-        () =>
-          createCreatorMind({
-            creatorId,
-            stewardEmail: options.stewardEmail ?? DEFAULT_CREATOR_STEWARD_EMAIL,
-            mindsClient,
-          }),
-        options.heartbeatIntervalMs,
-      );
-      mindId = mind.mindId;
-      mindEmail = mind.mindEmail;
-      const mindStored = await db.creator.updateMany({
-        where: {
-          id: creatorId,
-          channelPullRunId: runId,
-        },
-        data: {
-          mindId,
-          channelPullLeaseHeartbeatAt: options.now ?? new Date(),
-        },
-      });
-      if (mindStored.count !== 1) {
-        throw new WorkflowLeaseLostError("Channel pull", creatorId);
-      }
-    }
+    const mind = await ensureCreatorMind({
+      db,
+      creatorId,
+      runId,
+      workflowName: "Channel pull",
+      mindsClient,
+      stewardEmail: options.stewardEmail,
+      now: options.now,
+      heartbeatIntervalMs: options.heartbeatIntervalMs,
+      adoptionPollMs: options.adoptionPollMs,
+      maxAdoptionWaitMs: options.maxAdoptionWaitMs,
+      heartbeat: () => heartbeatChannelPullRun(db, creatorId, runId, options),
+    });
+    const mindId = mind.mindId;
+    const mindEmail = mind.mindEmail;
 
     const confirmation = await withWorkflowHeartbeat(
       () => heartbeatChannelPullRun(db, creatorId, runId, options),
@@ -493,7 +488,30 @@ export function mergeChannelPullCorpus(
   existingTranscripts: WeightedTranscript[],
   channelTranscripts: WeightedTranscript[],
 ): WeightedTranscript[] {
-  return [...existingTranscripts, ...channelTranscripts];
+  const seen = new Set<string>();
+  const selectedChannelSources = new Set(
+    channelTranscripts.map((transcript) => transcript.source),
+  );
+  const merged: WeightedTranscript[] = [];
+  for (const transcript of existingTranscripts) {
+    if (selectedChannelSources.has(transcript.source)) {
+      continue;
+    }
+    if (seen.has(transcript.source)) {
+      continue;
+    }
+    seen.add(transcript.source);
+    merged.push(transcript);
+  }
+  for (const transcript of channelTranscripts) {
+    if (seen.has(transcript.source)) {
+      continue;
+    }
+    seen.add(transcript.source);
+    merged.push(transcript);
+  }
+
+  return merged;
 }
 
 export function buildChannelPullReseedAlias(creatorId: string, now: Date): string {
@@ -543,6 +561,59 @@ function channelTranscriptEvidence(
     weight: CORPUS_WEIGHTS.source_video,
     transcript,
   };
+}
+
+async function loadChannelPullTranscriptEvidence(
+  db: PrismaClient,
+  creatorId: string,
+  video: ChannelVideo,
+): Promise<WeightedTranscript | null> {
+  const stored = await db.channelPullTranscript.findUnique({
+    where: {
+      creatorId_videoId: {
+        creatorId,
+        videoId: video.videoId,
+      },
+    },
+    select: {
+      transcript: true,
+    },
+  });
+  if (!stored) {
+    return null;
+  }
+
+  return channelTranscriptEvidence(video, parseTranscript(stored.transcript));
+}
+
+async function storeChannelPullTranscript(
+  db: PrismaClient,
+  creatorId: string,
+  video: ChannelVideo,
+  transcript: Transcript,
+): Promise<void> {
+  await db.channelPullTranscript.upsert({
+    where: {
+      creatorId_videoId: {
+        creatorId,
+        videoId: video.videoId,
+      },
+    },
+    create: {
+      creatorId,
+      videoId: video.videoId,
+      videoUrl: video.url,
+      title: video.title,
+      durationS: video.durationS,
+      transcript: transcript as unknown as Prisma.InputJsonValue,
+    },
+    update: {
+      videoUrl: video.url,
+      title: video.title,
+      durationS: video.durationS,
+      transcript: transcript as unknown as Prisma.InputJsonValue,
+    },
+  });
 }
 
 async function setChannelPullStage(
