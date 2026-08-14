@@ -4,6 +4,11 @@ import { prisma } from "./db";
 import { isRejectReason, type RejectReason } from "./reject-reasons";
 import { markClipRenderFailed, renderClip } from "./render";
 import {
+  ClipReadinessError,
+  assertClipReadyToReview,
+  readyToReviewClipWhere,
+} from "./readiness";
+import {
   assertClipStatusTransition,
   toClipSchedulingStatus,
   type ClipSchedulingStatus,
@@ -82,6 +87,7 @@ export type ReviewTransitionResult = {
 type ReviewRepositoryOptions = {
   prismaClient?: PrismaClient;
   storage?: Pick<R2Storage, "presignSourceUrl">;
+  onRenderComplete?: () => Promise<void>;
 };
 
 type RenderClipImpl = typeof renderClip;
@@ -354,6 +360,12 @@ export async function acceptClipForReview(
       select: {
         id: true,
         status: true,
+        mindRank: true,
+        video: {
+          select: {
+            pipelineStage: true,
+          },
+        },
         creator: {
           select: {
             captionStyle: true,
@@ -368,12 +380,14 @@ export async function acceptClipForReview(
 
     const fromStatus = toClipSchedulingStatus(clip.status);
     assertClipStatusTransition(fromStatus, "accepted");
+    assertClipReadyToReview(clip);
 
     const updateResult = await tx.clip.updateMany({
       where: {
         id: clip.id,
         creatorId,
         status: fromStatus,
+        AND: [readyToReviewClipWhere()],
       },
       data: {
         status: "accepted",
@@ -381,7 +395,7 @@ export async function acceptClipForReview(
     });
 
     if (updateResult.count !== 1) {
-      throw new Error(`Clip ${clip.id} was not ${fromStatus} at update time.`);
+      throw new ClipReadinessError("review");
     }
 
     await tx.learningEvent.create({
@@ -422,6 +436,12 @@ export async function rejectClipForReview(
       select: {
         id: true,
         status: true,
+        mindRank: true,
+        video: {
+          select: {
+            pipelineStage: true,
+          },
+        },
       },
     });
 
@@ -431,12 +451,14 @@ export async function rejectClipForReview(
 
     const fromStatus = toClipSchedulingStatus(clip.status);
     assertClipStatusTransition(fromStatus, "rejected");
+    assertClipReadyToReview(clip);
 
     const updateResult = await tx.clip.updateMany({
       where: {
         id: clip.id,
         creatorId,
         status: fromStatus,
+        AND: [readyToReviewClipWhere()],
       },
       data: {
         status: "rejected",
@@ -445,7 +467,7 @@ export async function rejectClipForReview(
     });
 
     if (updateResult.count !== 1) {
-      throw new Error(`Clip ${clip.id} was not ${fromStatus} at update time.`);
+      throw new ClipReadinessError("review");
     }
 
     await tx.learningEvent.create({
@@ -598,18 +620,28 @@ export function startRenderAfterAccept(
   renderClipImpl: RenderClipImpl = renderClip,
   options: ReviewRepositoryOptions = {},
 ): void {
-  void renderClipImpl(clipId, presetId).catch((error: unknown) => {
-    void markClipRenderFailed(clipId, error, {
-      prismaClient: options.prismaClient,
-    }).catch((writeError: unknown) => {
+  void renderClipImpl(clipId, presetId)
+    .then(async () => {
+      try {
+        await options.onRenderComplete?.();
+      } catch (error) {
+        console.error(
+          `Review post-render scheduling failed for clip ${clipId}: ${errorMessage(error)}`,
+        );
+      }
+    })
+    .catch((error: unknown) => {
+      void markClipRenderFailed(clipId, error, {
+        prismaClient: options.prismaClient,
+      }).catch((writeError: unknown) => {
+        console.error(
+          `Review render failure write failed for clip ${clipId}: ${errorMessage(writeError)}`,
+        );
+      });
       console.error(
-        `Review render failure write failed for clip ${clipId}: ${errorMessage(writeError)}`,
+        `Review render failed for clip ${clipId}: ${errorMessage(error)}`,
       );
     });
-    console.error(
-      `Review render failed for clip ${clipId}: ${errorMessage(error)}`,
-    );
-  });
 }
 
 function captionPresetFromStyle(style: Prisma.JsonValue): string {

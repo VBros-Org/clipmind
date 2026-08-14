@@ -66,6 +66,7 @@ async function main() {
         startMs: 1_000,
         endMs: 11_000,
         status: "accepted",
+        ...readyPostFields("video-a-1"),
         createdAt: date("2026-07-27T00:00:00.000Z"),
       },
     });
@@ -76,6 +77,7 @@ async function main() {
         startMs: 12_000,
         endMs: 22_000,
         status: "accepted",
+        ...readyPostFields("video-a-2"),
         createdAt: date("2026-07-27T00:01:00.000Z"),
       },
     });
@@ -86,6 +88,7 @@ async function main() {
         startMs: 2_000,
         endMs: 12_000,
         status: "accepted",
+        ...readyPostFields("video-b-1"),
         createdAt: date("2026-07-27T00:00:30.000Z"),
       },
     });
@@ -96,6 +99,7 @@ async function main() {
         startMs: 13_000,
         endMs: 23_000,
         status: "accepted",
+        ...readyPostFields("video-b-2"),
         createdAt: date("2026-07-27T00:01:30.000Z"),
       },
     });
@@ -133,6 +137,78 @@ async function main() {
     assert.equal(emptyResult.status, "empty");
     assert.equal(emptyResult.reason, "no_accepted_clips");
 
+    const unrenderedAccepted = await prisma.clip.create({
+      data: {
+        creatorId: creator.id,
+        videoId: videoA.id,
+        startMs: 24_000,
+        endMs: 34_000,
+        status: "accepted",
+        postCopyVariants: readyPostCopy("captioned-not-rendered"),
+        createdAt: date("2026-07-27T00:02:00.000Z"),
+      },
+    });
+    const captionlessAccepted = await prisma.clip.create({
+      data: {
+        creatorId: creator.id,
+        videoId: videoA.id,
+        startMs: 35_000,
+        endMs: 45_000,
+        status: "accepted",
+        renderedUrl: "https://cdn.example/rendered-captionless.mp4",
+        createdAt: date("2026-07-27T00:03:00.000Z"),
+      },
+    });
+    const incompleteCaptionAccepted = await prisma.clip.create({
+      data: {
+        creatorId: creator.id,
+        videoId: videoB.id,
+        startMs: 46_000,
+        endMs: 56_000,
+        status: "accepted",
+        renderedUrl: "https://cdn.example/rendered-incomplete.mp4",
+        postCopyVariants: {
+          youtube: "Incomplete post copy",
+          tiktok: "Incomplete post copy #clips",
+        },
+        createdAt: date("2026-07-27T00:04:00.000Z"),
+      },
+    });
+
+    const unreadyPass = await runSchedulePass(
+      creator.id,
+      date("2026-07-27T08:05:00.000Z"),
+    );
+    assert.equal(unreadyPass.status, "done");
+    assert.equal(unreadyPass.scheduled.length, 0);
+
+    const unreadyStatuses = await prisma.clip.findMany({
+      where: {
+        id: {
+          in: [
+            unrenderedAccepted.id,
+            captionlessAccepted.id,
+            incompleteCaptionAccepted.id,
+          ],
+        },
+      },
+      orderBy: {
+        createdAt: "asc",
+      },
+      select: {
+        status: true,
+        scheduledFor: true,
+      },
+    });
+    assert.deepEqual(
+      unreadyStatuses.map((clip) => [clip.status, clip.scheduledFor]),
+      [
+        ["accepted", null],
+        ["accepted", null],
+        ["accepted", null],
+      ],
+    );
+
     const posted = await markPosted(
       scheduled[0].clipId,
       date("2026-07-27T09:30:00.000Z"),
@@ -162,6 +238,7 @@ async function main() {
         startMs: 30_000,
         endMs: 40_000,
         status: "accepted",
+        ...readyPostFields("pass-a"),
         createdAt: date("2026-07-27T00:05:00.000Z"),
       },
     });
@@ -172,6 +249,7 @@ async function main() {
         startMs: 31_000,
         endMs: 41_000,
         status: "accepted",
+        ...readyPostFields("pass-b"),
         createdAt: date("2026-07-27T00:06:00.000Z"),
       },
     });
@@ -211,6 +289,22 @@ async function main() {
     assert.deepEqual(
       passClips.map((clip) => clip.scheduledFor?.toISOString()),
       ["2026-07-28T09:15:00.000Z", "2026-07-28T15:30:00.000Z"],
+    );
+
+    const captionlessScheduled = await prisma.clip.create({
+      data: {
+        creatorId: creator.id,
+        videoId: videoA.id,
+        startMs: 50_000,
+        endMs: 60_000,
+        status: "scheduled",
+        renderedUrl: "https://cdn.example/rendered-no-caption.mp4",
+        scheduledFor: date("2026-07-28T16:00:00.000Z"),
+      },
+    });
+    await assert.rejects(
+      markPosted(captionlessScheduled.id, date("2026-07-28T16:30:00.000Z")),
+      /not ready to post/,
     );
 
     console.log(
@@ -261,6 +355,21 @@ async function main() {
 
 function date(value: string): Date {
   return new Date(value);
+}
+
+function readyPostFields(label: string) {
+  return {
+    renderedUrl: `https://cdn.example/${label}.mp4`,
+    postCopyVariants: readyPostCopy(label),
+  };
+}
+
+function readyPostCopy(label: string) {
+  return {
+    youtube: `${label} title`,
+    tiktok: `${label} for TikTok #clipmind`,
+    instagram: `${label} on Instagram.\nExtra context here\n\n#clipmind`,
+  };
 }
 
 main().catch((error: unknown) => {

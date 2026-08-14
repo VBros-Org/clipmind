@@ -7,6 +7,7 @@ import {
   type NudgeCreatorState,
 } from "./nudges";
 import { sendPushNudgeToCreator } from "./push";
+import { readyToPostClipWhere } from "./readiness";
 import { scheduleSettingsFromRow } from "./schedule-settings";
 
 export type PushTickOptions = {
@@ -184,6 +185,7 @@ async function loadPushNudgeCreatorStates(
             creatorId: creator.id,
             status: "scheduled",
             postedAt: null,
+            AND: [readyToPostClipWhere()],
             scheduledFor: {
               lte: now,
             },

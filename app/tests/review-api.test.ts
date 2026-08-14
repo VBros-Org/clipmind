@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { Prisma } from "@prisma/client";
+
 import { prisma } from "../lib/db";
 import { cookieHeaderForAccessCode } from "../lib/review-auth";
 import {
@@ -19,6 +21,7 @@ type ReviewFixture = {
   creatorBId: string;
   creatorACode: string;
   creatorBCode: string;
+  videoId: string;
   clipId: string;
 };
 
@@ -99,6 +102,10 @@ test("accept transitions candidate to accepted and starts one background render"
 
 test("accept triggers deterministic scheduling when rhythm exists", async () => {
   const fixture = await createFixture();
+  let resolveRendered = () => {};
+  const rendered = new Promise<void>((resolve) => {
+    resolveRendered = resolve;
+  });
 
   try {
     await prisma.schedule.create({
@@ -115,11 +122,22 @@ test("accept triggers deterministic scheduling when rhythm exists", async () => 
       requestWithCode(fixture.clipId, fixture.creatorACode, "POST"),
       { id: fixture.clipId },
       {
-        renderClipImpl: async (clipId) => ({
-          clipId,
-          videoId: "video-after-render",
-          renderedUrl: "https://cdn.example/rendered.mp4",
-        }),
+        renderClipImpl: async (clipId) => {
+          await prisma.clip.update({
+            where: {
+              id: clipId,
+            },
+            data: {
+              renderedUrl: "https://cdn.example/rendered.mp4",
+            },
+          });
+          resolveRendered();
+          return {
+            clipId,
+            videoId: fixture.videoId,
+            renderedUrl: "https://cdn.example/rendered.mp4",
+          };
+        },
       },
     );
     assert.equal(response.status, 200);
@@ -128,8 +146,13 @@ test("accept triggers deterministic scheduling when rhythm exists", async () => 
       clip: { status: string };
       scheduledCount: number;
     };
-    assert.equal(body.clip.status, "scheduled");
-    assert.equal(body.scheduledCount, 1);
+    assert.equal(body.clip.status, "accepted");
+    assert.equal(body.scheduledCount, 0);
+
+    await rendered;
+    const scheduled = await waitForScheduled(fixture.clipId);
+    assert.equal(scheduled.status, "scheduled");
+    assert.ok(scheduled.scheduledFor);
 
     const clip = await prisma.clip.findUniqueOrThrow({
       where: {
@@ -154,6 +177,10 @@ test("accept captions a rank-3 clip before scheduling reaches the post sheet", a
   });
   const variants = postCopyVariants("Rank three captioned");
   let captionCalls = 0;
+  let resolveRendered = () => {};
+  const rendered = new Promise<void>((resolve) => {
+    resolveRendered = resolve;
+  });
 
   try {
     await prisma.creator.update({
@@ -202,11 +229,22 @@ test("accept captions a rank-3 clip before scheduling reaches the post sheet", a
             },
           },
         },
-        renderClipImpl: async (clipId) => ({
-          clipId,
-          videoId: "video-after-render",
-          renderedUrl: "https://cdn.example/rendered-rank-three.mp4",
-        }),
+        renderClipImpl: async (clipId) => {
+          await prisma.clip.update({
+            where: {
+              id: clipId,
+            },
+            data: {
+              renderedUrl: "https://cdn.example/rendered-rank-three.mp4",
+            },
+          });
+          resolveRendered();
+          return {
+            clipId,
+            videoId: fixture.videoId,
+            renderedUrl: "https://cdn.example/rendered-rank-three.mp4",
+          };
+        },
       },
     );
     assert.equal(response.status, 200);
@@ -219,9 +257,12 @@ test("accept captions a rank-3 clip before scheduling reaches the post sheet", a
       scheduledCount: number;
     };
     assert.equal(captionCalls, 1);
-    assert.equal(body.clip.status, "scheduled");
+    assert.equal(body.clip.status, "accepted");
     assert.deepEqual(body.clip.postCopyVariants, variants);
-    assert.equal(body.scheduledCount, 1);
+    assert.equal(body.scheduledCount, 0);
+
+    await rendered;
+    await waitForScheduled(fixture.clipId);
 
     const clip = await prisma.clip.findUniqueOrThrow({
       where: {
@@ -241,6 +282,51 @@ test("accept captions a rank-3 clip before scheduling reaches the post sheet", a
       now: new Date("2026-07-28T12:00:00.000Z"),
     });
     assert.deepEqual(home.readyToPost[0]?.postCopyVariants, variants);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("review verdicts are rejected while the video is still ranking", async () => {
+  const fixture = await createFixture({
+    pipelineStage: "ranking",
+  });
+
+  try {
+    const acceptResponse = await handleAcceptClip(
+      requestWithCode(fixture.clipId, fixture.creatorACode, "POST"),
+      { id: fixture.clipId },
+      {
+        renderClipImpl: async () => {
+          throw new Error("Ranking-stage accept should not render.");
+        },
+      },
+    );
+    assert.equal(acceptResponse.status, 409);
+    assert.match(
+      ((await acceptResponse.json()) as { error: string }).error,
+      /not ready for review/,
+    );
+
+    const rejectResponse = await handleRejectClip(
+      requestWithCode(fixture.clipId, fixture.creatorACode, "POST"),
+      { id: fixture.clipId },
+    );
+    assert.equal(rejectResponse.status, 409);
+    assert.match(
+      ((await rejectResponse.json()) as { error: string }).error,
+      /not ready for review/,
+    );
+
+    const clip = await prisma.clip.findUniqueOrThrow({
+      where: {
+        id: fixture.clipId,
+      },
+      select: {
+        status: true,
+      },
+    });
+    assert.equal(clip.status, "candidate");
   } finally {
     await cleanupFixture(fixture);
   }
@@ -438,6 +524,8 @@ test("posted API only transitions scheduled clips for the owning creator", async
       data: {
         status: "scheduled",
         scheduledFor: new Date("2026-07-28T11:00:00.000Z"),
+        renderedUrl: "https://cdn.example/rendered.mp4",
+        postCopyVariants: postCopyVariants("Ready to post"),
       },
     });
 
@@ -494,6 +582,89 @@ test("posted API only transitions scheduled clips for the owning creator", async
   }
 });
 
+test("posted API rejects scheduled clips without rendered media or complete captions", async () => {
+  const fixture = await createFixture();
+
+  try {
+    await prisma.clip.update({
+      where: {
+        id: fixture.clipId,
+      },
+      data: {
+        status: "scheduled",
+        scheduledFor: new Date("2026-07-28T11:00:00.000Z"),
+        renderedUrl: null,
+        postCopyVariants: postCopyVariants("Captioned but not rendered"),
+      },
+    });
+
+    const unrendered = await handleMarkClipPosted(
+      requestWithCode(fixture.clipId, fixture.creatorACode, "POST"),
+      { id: fixture.clipId },
+      {
+        now: new Date("2026-07-28T12:00:00.000Z"),
+      },
+    );
+    assert.equal(unrendered.status, 409);
+    assert.match(
+      ((await unrendered.json()) as { error: string }).error,
+      /not ready to post/,
+    );
+
+    await prisma.clip.update({
+      where: {
+        id: fixture.clipId,
+      },
+      data: {
+        renderedUrl: "https://cdn.example/rendered.mp4",
+        postCopyVariants: Prisma.DbNull,
+      },
+    });
+    const captionless = await handleMarkClipPosted(
+      requestWithCode(fixture.clipId, fixture.creatorACode, "POST"),
+      { id: fixture.clipId },
+      {
+        now: new Date("2026-07-28T12:00:00.000Z"),
+      },
+    );
+    assert.equal(captionless.status, 409);
+
+    await prisma.clip.update({
+      where: {
+        id: fixture.clipId,
+      },
+      data: {
+        postCopyVariants: {
+          youtube: "Missing Instagram",
+          tiktok: "Missing Instagram #clips",
+        },
+      },
+    });
+    const incomplete = await handleMarkClipPosted(
+      requestWithCode(fixture.clipId, fixture.creatorACode, "POST"),
+      { id: fixture.clipId },
+      {
+        now: new Date("2026-07-28T12:00:00.000Z"),
+      },
+    );
+    assert.equal(incomplete.status, 409);
+
+    const clip = await prisma.clip.findUniqueOrThrow({
+      where: {
+        id: fixture.clipId,
+      },
+      select: {
+        status: true,
+        postedAt: true,
+      },
+    });
+    assert.equal(clip.status, "scheduled");
+    assert.equal(clip.postedAt, null);
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
 test("mutating clip API rejects cross creator access", async () => {
   const fixture = await createFixture();
 
@@ -526,7 +697,8 @@ test("mutating clip API rejects cross creator access", async () => {
 async function createFixture(
   overrides: {
     mindRank?: number;
-    postCopyVariants?: PostCopyVariants | null;
+    pipelineStage?: string | null;
+    postCopyVariants?: PostCopyVariants | Record<string, string> | null;
   } = {},
 ): Promise<ReviewFixture> {
   const marker = `review-api-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -555,6 +727,7 @@ async function createFixture(
       sourceKey: `videos/${marker}/source.mp4`,
       sourceUrl: "https://example.com/source.mp4",
       status: "clipped",
+      pipelineStage: overrides.pipelineStage ?? "done",
     },
   });
   const clip = await prisma.clip.create({
@@ -583,6 +756,7 @@ async function createFixture(
     creatorBId: creatorB.id,
     creatorACode: creatorA.accessCode ?? "",
     creatorBCode: creatorB.accessCode ?? "",
+    videoId: video.id,
     clipId: clip.id,
   };
 }
@@ -676,9 +850,15 @@ async function waitForRenderedUrl(clipId: string) {
   return waitForClip(clipId, (clip) => Boolean(clip.renderedUrl));
 }
 
+async function waitForScheduled(clipId: string) {
+  return waitForClip(clipId, (clip) => clip.status === "scheduled");
+}
+
 async function waitForClip(
   clipId: string,
   predicate: (clip: {
+    status: string;
+    scheduledFor: Date | null;
     renderedUrl: string | null;
     renderFailedAt: Date | null;
     renderError: string | null;
@@ -690,6 +870,8 @@ async function waitForClip(
         id: clipId,
       },
       select: {
+        status: true,
+        scheduledFor: true,
         renderedUrl: true,
         renderFailedAt: true,
         renderError: true,

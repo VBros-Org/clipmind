@@ -13,6 +13,10 @@ import {
   type RunwayState,
 } from "./nudges";
 import { countPostedThisWeek } from "./posting-stats";
+import {
+  hasCompletePostCopyVariants,
+  readyToPostClipWhere,
+} from "./readiness";
 import { scheduleSettingsFromRow, type ScheduleSettings } from "./schedule-settings";
 import { publicMediaUrlForKey } from "./storage";
 import { formatVideoLabel } from "./video-label";
@@ -206,6 +210,7 @@ export async function loadHomeOverview(
         creatorId,
         status: "scheduled",
         postedAt: null,
+        AND: [readyToPostClipWhere()],
         scheduledFor: {
           not: null,
         },
@@ -237,6 +242,7 @@ export async function loadHomeOverview(
         creatorId,
         status: "scheduled",
         postedAt: null,
+        AND: [readyToPostClipWhere()],
         scheduledFor: {
           not: null,
         },
@@ -516,7 +522,7 @@ function toReadyToPostClip(clip: {
 }
 
 function hasPostCopyVariants(value: Prisma.JsonValue): boolean {
-  return toPostCopyVariants(value) !== null;
+  return hasCompletePostCopyVariants(value);
 }
 
 function toPostCopyVariants(value: Prisma.JsonValue): PostCopyVariants | null {

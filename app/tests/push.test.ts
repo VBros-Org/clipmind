@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import test from "node:test";
 
+import { Prisma } from "@prisma/client";
+
 import { prisma } from "../lib/db";
 import { computeDueNudges, type DueNudge } from "../lib/nudges";
 import { handlePushTick } from "../lib/push-api";
@@ -153,6 +155,51 @@ test("push tick sends failed upload nudges once when push reminders are off", as
     await restorePushSubscriptions(disabledSubscriptionIds);
     await restorePushSchedules(disabledCreatorIds);
     await cleanupPushFixture(fixture);
+  }
+});
+
+test("push tick does not nudge scheduled clips until render and captions are ready", async () => {
+  const unrendered = await createPushFixture("unrendered", {
+    renderedUrl: null,
+  });
+  const captionless = await createPushFixture("captionless", {
+    postCopyVariants: null,
+  });
+  const disabledCreatorIds = await disableOtherPushSchedules([
+    unrendered.creatorId,
+    captionless.creatorId,
+  ]);
+  const disabledSubscriptionIds = await disableOtherPushSubscriptions([
+    unrendered.creatorId,
+    captionless.creatorId,
+  ]);
+  const now = new Date("2026-07-29T09:05:00.000Z");
+
+  try {
+    const result = await runPushTick(now, {
+      prismaClient: prisma,
+      sendPushNudgeToCreatorImpl: async () => {
+        throw new Error("Unready scheduled clips should not send post nudges.");
+      },
+    });
+
+    assert.equal(result.nudgesDue, 0);
+    assert.equal(result.sent, 0);
+
+    const postLogs = await prisma.nudgeLog.count({
+      where: {
+        creatorId: {
+          in: [unrendered.creatorId, captionless.creatorId],
+        },
+        kind: "post",
+      },
+    });
+    assert.equal(postLogs, 0);
+  } finally {
+    await restorePushSubscriptions(disabledSubscriptionIds);
+    await restorePushSchedules(disabledCreatorIds);
+    await cleanupPushFixture(captionless);
+    await cleanupPushFixture(unrendered);
   }
 });
 
@@ -503,7 +550,13 @@ test("push send does not disable subscriptions on INVALID_ARGUMENT", async () =>
   }
 });
 
-async function createPushFixture(label: string): Promise<PushFixture> {
+async function createPushFixture(
+  label: string,
+  overrides: {
+    renderedUrl?: string | null;
+    postCopyVariants?: Record<string, string> | null;
+  } = {},
+): Promise<PushFixture> {
   const marker = `push-${label}-${Date.now()}-${Math.random()
     .toString(36)
     .slice(2)}`;
@@ -532,6 +585,16 @@ async function createPushFixture(label: string): Promise<PushFixture> {
       endMs: 10_000,
       status: "scheduled",
       scheduledFor: DEFAULT_POST_SLOT,
+      renderedUrl:
+        overrides.renderedUrl === undefined
+          ? `https://cdn.example/clips/${marker}.mp4`
+          : overrides.renderedUrl,
+      postCopyVariants:
+        overrides.postCopyVariants === undefined
+          ? readyPostCopy(marker)
+          : overrides.postCopyVariants === null
+            ? Prisma.DbNull
+            : overrides.postCopyVariants,
     },
   });
   await prisma.schedule.create({
@@ -831,6 +894,14 @@ function sentPushResult(creatorId: string, messageId: string) {
 
 function postDedupeKey(clipId: string, scheduledFor: Date): string {
   return `${clipId}:${scheduledFor.toISOString()}`;
+}
+
+function readyPostCopy(label: string) {
+  return {
+    youtube: `${label} title`,
+    tiktok: `${label} for TikTok #clipmind`,
+    instagram: `${label} on Instagram.\nExtra context here\n\n#clipmind`,
+  };
 }
 
 async function findNudgeLog(

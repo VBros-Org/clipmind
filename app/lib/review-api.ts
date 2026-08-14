@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 
 import { countPostedThisWeek } from "./posting-stats";
+import { ClipReadinessError } from "./readiness";
 import { loadCreatorSessionFromCookieHeader } from "./review-auth";
 import {
   captionClip,
@@ -133,6 +134,10 @@ export async function handleAcceptClip(
       options.renderClipImpl,
       {
         prismaClient: options.prismaClient,
+        onRenderComplete: () =>
+          runSchedulePass(session.creatorId, new Date(), {
+            prismaClient: options.prismaClient,
+          }).then(() => undefined),
       },
     );
     startTasteFeedbackAfterVerdict(session.creatorId, options);
@@ -176,6 +181,10 @@ export async function handleRetryClipRender(
       options.renderClipImpl,
       {
         prismaClient: options.prismaClient,
+        onRenderComplete: () =>
+          runSchedulePass(session.creatorId, new Date(), {
+            prismaClient: options.prismaClient,
+          }).then(() => undefined),
       },
     );
 
@@ -336,6 +345,10 @@ async function clipId(params: RouteParams): Promise<string> {
 }
 
 function transitionErrorResponse(error: unknown): Response {
+  if (error instanceof ClipReadinessError) {
+    return json({ error: error.message }, 409);
+  }
+
   if (
     error instanceof Error &&
     error.message.startsWith("Invalid clip status transition")
