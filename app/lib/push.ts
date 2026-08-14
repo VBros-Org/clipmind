@@ -1,6 +1,6 @@
 import { createSign } from "node:crypto";
 
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 
 import { prisma } from "./db";
 import type { DueNudge } from "./nudges";
@@ -9,11 +9,13 @@ const FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
 const TOKEN_AUDIENCE = "https://oauth2.googleapis.com/token";
 
 type PushOptions = {
-  prismaClient?: PrismaClient;
+  prismaClient?: PushDbClient;
   fetchImpl?: typeof fetch;
   env?: Record<string, string | undefined>;
   now?: Date;
 };
+
+type PushDbClient = PrismaClient | Prisma.TransactionClient;
 
 export type PushSendResult = {
   creatorId: string;
@@ -101,10 +103,20 @@ export async function sendPushNudgeToCreator(
   const now = options.now ?? new Date();
 
   for (const subscription of subscriptions) {
-    const response = await sendFcmMessage(subscription.token, nudge, env, {
-      ...options,
-      accessToken,
-    });
+    let response: FcmSendResponse;
+    try {
+      response = await sendFcmMessage(subscription.token, nudge, env, {
+        ...options,
+        accessToken,
+      });
+    } catch (error) {
+      result.failures.push({
+        tokenId: subscription.id,
+        status: 0,
+        errorCode: shortErrorMessage(error),
+      });
+      continue;
+    }
 
     if (response.status === "sent") {
       result.sent += 1;
@@ -284,12 +296,11 @@ async function sendFcmMessage(
 }
 
 function isInvalidTokenError(status: number, errorCode: string | null): boolean {
-  return (
-    errorCode === "UNREGISTERED" ||
-    errorCode === "INVALID_ARGUMENT" ||
-    errorCode === "INVALID_REGISTRATION_TOKEN" ||
-    (status === 404 && errorCode === null)
-  );
+  if (errorCode === "INVALID_ARGUMENT") {
+    return false;
+  }
+
+  return errorCode === "UNREGISTERED" || status === 404;
 }
 
 function fcmErrorCode(body: unknown): string | null {
@@ -330,4 +341,9 @@ function clean(value: string | undefined): string | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function shortErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return (message || "Unknown error.").replace(/\s+/g, " ").slice(0, 120);
 }

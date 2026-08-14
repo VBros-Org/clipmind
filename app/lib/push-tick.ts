@@ -1,4 +1,4 @@
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 
 import { prisma } from "./db";
 import {
@@ -9,10 +9,12 @@ import {
 import { sendPushNudgeToCreator } from "./push";
 import { scheduleSettingsFromRow } from "./schedule-settings";
 
-type PushTickOptions = {
-  prismaClient?: PrismaClient;
+export type PushTickOptions = {
+  prismaClient?: PushTickDbClient;
   sendPushNudgeToCreatorImpl?: typeof sendPushNudgeToCreator;
 };
+
+type PushTickDbClient = PrismaClient | Prisma.TransactionClient;
 
 export type PushTickResult = {
   status: "done";
@@ -54,20 +56,50 @@ export async function runPushTick(
     result.nudgesDue += dueNudges.length;
 
     for (const nudge of dueNudges) {
-      const reserved = await reserveNudge(db, creator.id, nudge, now);
-      if (!reserved) {
-        result.skippedDuplicate += 1;
-        continue;
-      }
+      try {
+        const reserved = await reserveNudge(db, creator.id, nudge, now);
+        if (!reserved) {
+          result.skippedDuplicate += 1;
+          continue;
+        }
 
-      const sendResult = await sendPush(creator.id, nudge, {
-        prismaClient: db,
-        now,
-      });
-      result.sent += sendResult.sent;
-      result.disabledSubscriptions += sendResult.disabled;
-      result.failures += sendResult.failures.length;
-      result.messageIds.push(...sendResult.messageIds);
+        const sendResult = await sendPush(creator.id, nudge, {
+          prismaClient: db,
+          now,
+        });
+        result.sent += sendResult.sent;
+        result.disabledSubscriptions += sendResult.disabled;
+        result.failures += sendResult.failures.length;
+        result.messageIds.push(...sendResult.messageIds);
+
+        if (sendResult.sent > 0) {
+          await markNudgeSent(db, creator.id, nudge, now, sendResult);
+        } else {
+          await markNudgeFailed(
+            db,
+            creator.id,
+            nudge,
+            now,
+            summarizeSendFailures(sendResult),
+          );
+        }
+      } catch (error) {
+        result.failures += 1;
+        await markNudgeFailed(
+          db,
+          creator.id,
+          nudge,
+          now,
+          shortErrorMessage(error),
+        ).catch((markError: unknown) => {
+          console.error(
+            `Push nudge failure state update failed for ${creator.id}/${nudge.kind}/${nudge.dedupeKey}: ${shortErrorMessage(markError)}`,
+          );
+        });
+        console.error(
+          `Push nudge failed for ${creator.id}/${nudge.kind}/${nudge.dedupeKey}: ${shortErrorMessage(error)}`,
+        );
+      }
     }
   }
 
@@ -75,7 +107,7 @@ export async function runPushTick(
 }
 
 async function loadPushNudgeCreatorStates(
-  db: PrismaClient,
+  db: PushTickDbClient,
   now: Date,
 ): Promise<NudgeCreatorState[]> {
   const creators = await db.creator.findMany({
@@ -89,7 +121,9 @@ async function loadPushNudgeCreatorStates(
         {
           videos: {
             some: {
-              pipelineStage: "failed",
+              pipelineStage: {
+                in: ["done", "failed"],
+              },
             },
           },
         },
@@ -123,8 +157,13 @@ async function loadPushNudgeCreatorStates(
 
   return Promise.all(
     creators.map(async (creator) => {
-      const [reviewCount, queuedClipCount, scheduledClips, failedVideos] =
-        await Promise.all([
+      const [
+        reviewCount,
+        queuedClipCount,
+        scheduledClips,
+        failedVideos,
+        doneVideos,
+      ] = await Promise.all([
         db.clip.count({
           where: {
             creatorId: creator.id,
@@ -181,6 +220,25 @@ async function loadPushNudgeCreatorStates(
             id: true,
             pipelineStage: true,
             pipelineError: true,
+            pipelineRetryGeneration: true,
+          },
+        }),
+        db.video.findMany({
+          where: {
+            creatorId: creator.id,
+            pipelineStage: "done",
+          },
+          orderBy: [
+            {
+              createdAt: "asc",
+            },
+            {
+              id: "asc",
+            },
+          ],
+          select: {
+            id: true,
+            pipelineStage: true,
           },
         }),
       ]);
@@ -193,6 +251,7 @@ async function loadPushNudgeCreatorStates(
         schedule: scheduleSettingsFromRow(creator.schedule),
         scheduledClips,
         failedVideos,
+        doneVideos,
       };
     }),
   );
@@ -212,41 +271,141 @@ function pushEnabledNudges(
 }
 
 async function reserveNudge(
-  db: PrismaClient,
+  db: PushTickDbClient,
   creatorId: string,
   nudge: DueNudge,
   now: Date,
 ): Promise<boolean> {
-  try {
+  // The whole tick runs inside one transaction holding the advisory xact
+  // lock, so ticks are globally serialized and this read-then-branch cannot
+  // race. It must NOT rely on catching a unique-constraint violation: any SQL
+  // error aborts the surrounding Postgres transaction and poisons every later
+  // query in the tick.
+  const existing = await db.nudgeLog.findUnique({
+    where: {
+      creatorId_kind_dedupeKey: {
+        creatorId,
+        kind: nudge.kind,
+        dedupeKey: nudge.dedupeKey,
+      },
+    },
+    select: { status: true },
+  });
+
+  if (existing === null) {
     await db.nudgeLog.create({
       data: {
         creatorId,
         kind: nudge.kind,
         dedupeKey: nudge.dedupeKey,
-        sentAt: now,
+        status: "reserved",
+        reservedAt: now,
+        sentAt: null,
+        lastFailureAt: null,
+        lastFailure: null,
       },
     });
     return true;
-  } catch (error) {
-    if (isUniqueConstraintError(error)) {
-      return false;
-    }
-
-    throw error;
   }
+
+  if (existing.status === "failed") {
+    const reclaimed = await db.nudgeLog.updateMany({
+      where: {
+        creatorId,
+        kind: nudge.kind,
+        dedupeKey: nudge.dedupeKey,
+        status: "failed",
+      },
+      data: {
+        status: "reserved",
+        reservedAt: now,
+        sentAt: null,
+        lastFailureAt: null,
+        lastFailure: null,
+      },
+    });
+    return reclaimed.count === 1;
+  }
+
+  return false;
 }
 
-function isUniqueConstraintError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === "P2002"
-  );
+async function markNudgeSent(
+  db: PushTickDbClient,
+  creatorId: string,
+  nudge: DueNudge,
+  now: Date,
+  sendResult: Awaited<ReturnType<typeof sendPushNudgeToCreator>>,
+): Promise<void> {
+  const failureSummary =
+    sendResult.failures.length > 0 ? summarizeSendFailures(sendResult) : null;
+  await db.nudgeLog.update({
+    where: {
+      creatorId_kind_dedupeKey: {
+        creatorId,
+        kind: nudge.kind,
+        dedupeKey: nudge.dedupeKey,
+      },
+    },
+    data: {
+      status: "sent",
+      sentAt: now,
+      lastFailureAt: failureSummary ? now : null,
+      lastFailure: failureSummary,
+    },
+  });
+}
+
+async function markNudgeFailed(
+  db: PushTickDbClient,
+  creatorId: string,
+  nudge: DueNudge,
+  now: Date,
+  reason: string,
+): Promise<void> {
+  await db.nudgeLog.updateMany({
+    where: {
+      creatorId,
+      kind: nudge.kind,
+      dedupeKey: nudge.dedupeKey,
+      status: "reserved",
+    },
+    data: {
+      status: "failed",
+      sentAt: null,
+      lastFailureAt: now,
+      lastFailure: reason,
+    },
+  });
+}
+
+function summarizeSendFailures(
+  sendResult: Awaited<ReturnType<typeof sendPushNudgeToCreator>>,
+): string {
+  if (sendResult.failures.length === 0) {
+    return sendResult.attempted === 0
+      ? "No active push subscriptions."
+      : "No push notifications were delivered.";
+  }
+
+  return sendResult.failures
+    .slice(0, 3)
+    .map((failure) =>
+      failure.errorCode
+        ? `${failure.status}:${failure.errorCode}`
+        : String(failure.status),
+    )
+    .join(", ")
+    .slice(0, 280);
 }
 
 function assertValidDate(value: Date, label: string): void {
   if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
     throw new Error(`${label} must be a valid Date.`);
   }
+}
+
+function shortErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return (message || "Unknown error.").replace(/\s+/g, " ").slice(0, 280);
 }

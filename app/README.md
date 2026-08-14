@@ -7,7 +7,7 @@ TypeScript, Next.js (App Router), Node 22+. This is the boss: it owns the databa
 - Deterministic control flow: clip state machine, rotation (least-recently-served), dedup, scheduling execution, retries.
 - Calls the clip service over HTTP (token-gated) and the Minds agent via the Builder API / client-lib.
 - FCM web push for the "time to post" nudge.
-- Push nudges run in the long-lived Next server process every 5 minutes. The tick takes a Postgres advisory lock before it sends, so multiple app instances do not duplicate notifications. `npm run push:tick` calls the same protected endpoint for manual proof or debugging.
+- Push nudges run in the long-lived Next server process every 5 minutes. The tick uses a transaction-scoped Postgres advisory lock plus the `NudgeLog` reservation key, so overlapping app instances do not duplicate notifications. Configure an external cron to `POST /api/push/tick` with `CRON_SECRET` as the backstop; `npm run push:tick` calls that same guarded endpoint for manual proof or debugging.
 
 Do not put reliability-critical control flow in the Mind. See [`../AGENTS.md`](../AGENTS.md) section 0.
 

@@ -390,6 +390,7 @@ export async function handleRetryVideo(
     }
 
     const retryStage = failedMindOnboardingStage(video.creator.mindError);
+    await incrementPipelineRetryGeneration(db, video.id);
     startPipelineInBackground(
       video.id,
       options.runFirstVideoOnboardingPipelineImpl ??
@@ -412,6 +413,7 @@ export async function handleRetryVideo(
   }
 
   const retryStage = failedPipelineStage(video.pipelineError);
+  await incrementPipelineRetryGeneration(db, video.id);
   startPipelineInBackground(
     video.id,
     options.retryPipelineImpl ?? retryPipeline,
@@ -621,6 +623,22 @@ function startPipelineInBackground(
     .catch((error: unknown) => {
       console.error(`${label} crashed for ${videoId}: ${errorMessage(error)}`);
     });
+}
+
+async function incrementPipelineRetryGeneration(
+  db: PrismaClient,
+  videoId: string,
+): Promise<void> {
+  await db.video.update({
+    where: {
+      id: videoId,
+    },
+    data: {
+      pipelineRetryGeneration: {
+        increment: 1,
+      },
+    },
+  });
 }
 
 async function loadCreatorSession(

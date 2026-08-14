@@ -155,6 +155,7 @@ test("selectHomeNudges respects nudge toggles and runway threshold", () => {
 
 test("computeDueNudges projects to the same Home nudge cards", () => {
   const now = new Date(2026, 6, 29, 10, 5, 0);
+  const scheduledFor = new Date(2026, 6, 29, 10, 0, 0);
   const due = computeDueNudges(
     {
       id: "creator-1",
@@ -172,7 +173,7 @@ test("computeDueNudges projects to the same Home nudge cards", () => {
       scheduledClips: [
         {
           id: "clip-1",
-          scheduledFor: new Date(2026, 6, 29, 10, 0, 0),
+          scheduledFor,
           status: "scheduled",
         },
       ],
@@ -209,7 +210,7 @@ test("computeDueNudges projects to the same Home nudge cards", () => {
     [
       ["review", "2026-07-29"],
       ["runway", "2026-07-29"],
-      ["post", "clip-1"],
+      ["post", `clip-1:${scheduledFor.toISOString()}`],
     ],
   );
 });
@@ -297,11 +298,13 @@ test("computeDueNudges emits failed upload nudges with video dedupe", () => {
           id: "video-1",
           pipelineStage: "failed",
           pipelineError: "captions: LLM call failed.",
+          pipelineRetryGeneration: 3,
         },
         {
           id: "video-1",
           pipelineStage: "failed",
           pipelineError: "captions: LLM call failed.",
+          pipelineRetryGeneration: 3,
         },
         {
           id: "video-2",
@@ -315,7 +318,7 @@ test("computeDueNudges emits failed upload nudges with video dedupe", () => {
 
   assert.equal(due.length, 1);
   assert.equal(due[0]?.kind, "failed");
-  assert.equal(due[0]?.dedupeKey, "video-1");
+  assert.equal(due[0]?.dedupeKey, "video-1:3");
   assert.equal(due[0]?.title, "Upload failed at captions. Tap to retry.");
   assert.equal(due[0]?.notificationTitle, "Upload failed at captions.");
   assert.equal(due[0]?.body, "Tap to retry.");
@@ -328,6 +331,37 @@ test("computeDueNudges emits failed upload nudges with video dedupe", () => {
       dismissal: "session",
     },
   ]);
+});
+
+test("computeDueNudges emits pipeline done nudges keyed by video", () => {
+  const due = computeDueNudges(
+    {
+      id: "creator-1",
+      reviewCount: 0,
+      queuedClipCount: 0,
+      schedule: {
+        slotsPerDay: 2,
+        reviewReminders: false,
+        runwayWarnings: false,
+        runwayThresholdDays: 2,
+        postTimeNudges: false,
+        pushNudges: true,
+      },
+      scheduledClips: [],
+      doneVideos: [
+        {
+          id: "video-ready",
+          pipelineStage: "done",
+        },
+      ],
+    },
+    new Date("2026-07-29T10:05:00.000Z"),
+  );
+
+  assert.equal(due.length, 1);
+  assert.equal(due[0]?.kind, "pipeline_done");
+  assert.equal(due[0]?.dedupeKey, "video-ready");
+  assert.equal(due[0]?.href, "/review/video-ready");
 });
 
 test("selectHomeUploadCards keeps active videos and marks failures as danger", () => {

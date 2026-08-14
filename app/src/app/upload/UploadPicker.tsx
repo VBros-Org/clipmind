@@ -117,10 +117,12 @@ export function UploadPicker({
   initialUploads,
   includeMindSteps = false,
   explainer = "ClipMind finds the moments, ranks them by your taste, and writes your captions.",
+  pushNudgesEnabled = false,
 }: {
   initialUploads: UploadView[];
   includeMindSteps?: boolean;
   explainer?: string;
+  pushNudgesEnabled?: boolean;
 }) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -443,7 +445,9 @@ export function UploadPicker({
         >
           {transferState.notice === "uploading"
             ? "Keep ClipMind open while this uploads."
-            : "Safe to leave. We will nudge you when clips are ready."}
+            : pushNudgesEnabled
+              ? "Safe to leave. We will nudge you when clips are ready."
+              : "Safe to leave. Push is off, so check Upload or Review later."}
         </p>
       ) : null}
 

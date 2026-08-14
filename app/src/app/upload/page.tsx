@@ -47,6 +47,7 @@ export default async function UploadPage() {
           <UploadPicker
             initialUploads={uploadOverview.recentUploads}
             includeMindSteps={uploadOverview.needsMindCorpus}
+            pushNudgesEnabled={frame.pushNudgesEnabled}
           />
         </section>
       </section>
