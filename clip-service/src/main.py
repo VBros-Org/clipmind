@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 import shutil
 import tempfile
@@ -18,15 +19,17 @@ from typing import Any
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from starlette.background import BackgroundTask
 from starlette.datastructures import UploadFile
-from starlette.responses import FileResponse
+from starlette.responses import FileResponse, JSONResponse
 
 from .candidates import build_candidates
 from .config import get_settings
 from .presets import CaptionPreset, get_caption_preset, validate_caption_presets
 from .render import (
+    RenderOutputValidationError,
     cut_segment_for_transcription,
     render_cut_with_subtitles,
     render_thumbnail_frame,
+    validate_rendered_video,
 )
 from .subtitles import transcript_for_cut, transcript_from_payload
 from .transcribe import Transcript, probe_video_duration_ms, transcribe_video
@@ -39,8 +42,16 @@ from .youtube import (
     list_youtube_channel_uploads,
 )
 
-MAX_DOWNLOAD_BYTES = 1_000_000_000
+MAX_SOURCE_URL_DOWNLOAD_BYTES = 1_000_000_000
+# /candidates still needs the whole source for Whisper and audio-anchor analysis.
+# Until segmented candidate analysis lands, its URL-download ceiling deliberately
+# matches the hard multipart cap instead of the old 1 GB default.
+MAX_CANDIDATES_SOURCE_BYTES = 2_000_000_000
+MAX_MULTIPART_UPLOAD_BYTES = 2_000_000_000
+MAX_CUT_WINDOW_MS = 180_000
 MAX_REMOTE_TRANSCRIBE_DURATION_S = 1_200
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -53,9 +64,38 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="ClipMind Clip Service", lifespan=lifespan)
 
 
+@app.middleware("http")
+async def cap_multipart_upload_body(request: Request, call_next: Any) -> Any:
+    content_type = request.headers.get("content-type", "").lower()
+    if not content_type.startswith("multipart/form-data"):
+        return await call_next(request)
+
+    content_length = _content_length(request)
+    if content_length is not None and content_length > MAX_MULTIPART_UPLOAD_BYTES:
+        return _multipart_too_large_response()
+
+    received = 0
+    receive = request.receive
+
+    async def capped_receive() -> dict[str, Any]:
+        nonlocal received
+        message = await receive()
+        if message.get("type") == "http.request":
+            received += len(message.get("body", b""))
+            if received > MAX_MULTIPART_UPLOAD_BYTES:
+                raise MultipartBodyTooLarge()
+        return message
+
+    try:
+        return await call_next(Request(request.scope, capped_receive))
+    except MultipartBodyTooLarge:
+        return _multipart_too_large_response()
+
+
 @dataclass(frozen=True)
 class CutRequest:
-    video_path: Path
+    video_path: Path | str
+    source_url: str | None
     preset: CaptionPreset
     start_ms: int
     end_ms: int
@@ -74,8 +114,13 @@ class CutRequest:
 
 @dataclass(frozen=True)
 class ThumbnailRequest:
-    video_path: Path
+    video_path: Path | str
+    source_url: str | None
     timestamp_ms: int
+
+
+class MultipartBodyTooLarge(RuntimeError):
+    """Raised when a multipart request body exceeds the service cap."""
 
 
 @app.get("/health")
@@ -104,7 +149,11 @@ async def candidates(
 
     with tempfile.TemporaryDirectory(prefix="clipmind-candidates-") as raw_temp_dir:
         temp_dir = Path(raw_temp_dir)
-        video_path = await _materialize_video_input(request, temp_dir)
+        video_path = await _materialize_video_input(
+            request,
+            temp_dir,
+            MAX_CANDIDATES_SOURCE_BYTES,
+        )
         duration_ms = probe_video_duration_ms(video_path)
         transcript = transcribe_video(
             video_path,
@@ -129,7 +178,11 @@ async def transcribe(
 
     with tempfile.TemporaryDirectory(prefix="clipmind-transcribe-") as raw_temp_dir:
         temp_dir = Path(raw_temp_dir)
-        video_path = await _materialize_video_input(request, temp_dir)
+        video_path = await _materialize_video_input(
+            request,
+            temp_dir,
+            MAX_SOURCE_URL_DOWNLOAD_BYTES,
+        )
         duration_ms = probe_video_duration_ms(video_path)
         transcript = transcribe_video(
             video_path,
@@ -212,53 +265,46 @@ async def cut_clip(
 
     try:
         cut_request = await _parse_cut_request(request, temp_dir)
-        effective_start_ms = cut_request.effective_start_ms
-        effective_end_ms = cut_request.effective_end_ms
-        duration_ms = effective_end_ms - effective_start_ms
-
-        source_duration_ms = probe_video_duration_ms(cut_request.video_path)
-        if effective_start_ms >= source_duration_ms or effective_end_ms > source_duration_ms:
-            raise HTTPException(
-                status_code=422,
-                detail="Requested window is outside the source video duration.",
-            )
-
-        if cut_request.transcript_payload is None:
-            transcript_source_path = temp_dir / "transcribe-window.mp4"
-            cut_segment_for_transcription(
-                cut_request.video_path,
-                transcript_source_path,
-                effective_start_ms,
-                duration_ms,
-            )
-            transcript = transcribe_video(
-                transcript_source_path,
-                settings.openai_api_key,
+        try:
+            output_path, duration_ms = _render_cut_response_file(
+                cut_request,
                 temp_dir,
-                duration_ms,
+                settings.openai_api_key,
             )
-            subtitles = transcript_for_cut(transcript, 0, duration_ms)
-        else:
+        except HTTPException:
+            raise
+        except RenderOutputValidationError as exc:
+            if cut_request.source_url is None:
+                raise _render_output_http_exception(exc) from exc
+            logger.error(
+                "FFMPEG_URL_INPUT_FAILED_FALLING_BACK_TO_FULL_DOWNLOAD for /cut",
+                exc_info=True,
+            )
+            fallback_request = _download_cut_fallback(cut_request, temp_dir)
             try:
-                transcript = transcript_from_payload(cut_request.transcript_payload)
-            except (TypeError, ValueError) as exc:
-                raise HTTPException(status_code=422, detail=str(exc)) from exc
-            subtitles = transcript_for_cut(
-                transcript,
-                effective_start_ms,
-                effective_end_ms,
+                output_path, duration_ms = _render_cut_response_file(
+                    fallback_request,
+                    temp_dir,
+                    settings.openai_api_key,
+                )
+            except RenderOutputValidationError as fallback_exc:
+                raise _render_output_http_exception(fallback_exc) from fallback_exc
+        except RuntimeError:
+            if cut_request.source_url is None:
+                raise
+            logger.error(
+                "FFMPEG_URL_INPUT_FAILED_FALLING_BACK_TO_FULL_DOWNLOAD for /cut",
+                exc_info=True,
             )
-
-        output_path = temp_dir / "clipmind-cut.mp4"
-        render_cut_with_subtitles(
-            cut_request.video_path,
-            output_path,
-            subtitles,
-            cut_request.preset,
-            effective_start_ms,
-            duration_ms,
-            temp_dir,
-        )
+            fallback_request = _download_cut_fallback(cut_request, temp_dir)
+            try:
+                output_path, duration_ms = _render_cut_response_file(
+                    fallback_request,
+                    temp_dir,
+                    settings.openai_api_key,
+                )
+            except RenderOutputValidationError as fallback_exc:
+                raise _render_output_http_exception(fallback_exc) from fallback_exc
 
         return FileResponse(
             output_path,
@@ -285,19 +331,22 @@ async def thumbnail(
 
     try:
         thumbnail_request = await _parse_thumbnail_request(request, temp_dir)
-        source_duration_ms = probe_video_duration_ms(thumbnail_request.video_path)
-        if thumbnail_request.timestamp_ms >= source_duration_ms:
-            raise HTTPException(
-                status_code=422,
-                detail="timestamp_ms is outside the source video duration.",
+        try:
+            output_path = _render_thumbnail_response_file(thumbnail_request, temp_dir)
+        except HTTPException:
+            raise
+        except RuntimeError:
+            if thumbnail_request.source_url is None:
+                raise
+            logger.error(
+                "FFMPEG_URL_INPUT_FAILED_FALLING_BACK_TO_FULL_DOWNLOAD for /thumbnail",
+                exc_info=True,
             )
-
-        output_path = temp_dir / "clipmind-thumbnail.jpg"
-        render_thumbnail_frame(
-            thumbnail_request.video_path,
-            output_path,
-            thumbnail_request.timestamp_ms,
-        )
+            fallback_request = _download_thumbnail_fallback(thumbnail_request, temp_dir)
+            output_path = _render_thumbnail_response_file(
+                fallback_request,
+                temp_dir,
+            )
 
         return FileResponse(
             output_path,
@@ -313,7 +362,11 @@ async def thumbnail(
         raise
 
 
-async def _materialize_video_input(request: Request, temp_dir: Path) -> Path:
+async def _materialize_video_input(
+    request: Request,
+    temp_dir: Path,
+    max_download_bytes: int,
+) -> Path:
     content_type = request.headers.get("content-type", "").lower()
     if content_type.startswith("multipart/form-data"):
         return await _save_upload(request, temp_dir)
@@ -325,7 +378,7 @@ async def _materialize_video_input(request: Request, temp_dir: Path) -> Path:
         source_url = payload.get("source_url") or payload.get("url")
         if not isinstance(source_url, str) or not source_url.strip():
             raise HTTPException(status_code=422, detail="source_url is required.")
-        return _download_source_url(source_url.strip(), temp_dir)
+        return _download_source_url(source_url.strip(), temp_dir, max_download_bytes)
 
     raise HTTPException(
         status_code=415,
@@ -356,12 +409,148 @@ async def _save_upload(request: Request, temp_dir: Path) -> Path:
 async def _save_upload_file(upload: UploadFile, temp_dir: Path, stem: str) -> Path:
     suffix = Path(upload.filename or "upload.mp4").suffix or ".mp4"
     video_path = temp_dir / f"{stem}{suffix}"
-    with video_path.open("wb") as output:
-        while chunk := await upload.read(1024 * 1024):
-            output.write(chunk)
-    await upload.close()
+    total = 0
+    try:
+        with video_path.open("wb") as output:
+            while chunk := await upload.read(1024 * 1024):
+                total += len(chunk)
+                if total > MAX_MULTIPART_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=_multipart_too_large_detail(),
+                    )
+                output.write(chunk)
+    except Exception:
+        video_path.unlink(missing_ok=True)
+        raise
+    finally:
+        await upload.close()
 
     return video_path
+
+
+def _render_cut_response_file(
+    cut_request: CutRequest,
+    temp_dir: Path,
+    openai_api_key: str,
+) -> tuple[Path, int]:
+    effective_start_ms = cut_request.effective_start_ms
+    effective_end_ms = cut_request.effective_end_ms
+    duration_ms = effective_end_ms - effective_start_ms
+
+    source_duration_ms = probe_video_duration_ms(cut_request.video_path)
+    if effective_start_ms >= source_duration_ms or effective_end_ms > source_duration_ms:
+        raise HTTPException(
+            status_code=422,
+            detail="Requested window is outside the source video duration.",
+        )
+
+    if cut_request.transcript_payload is None:
+        transcript_source_path = temp_dir / "transcribe-window.mp4"
+        cut_segment_for_transcription(
+            cut_request.video_path,
+            transcript_source_path,
+            effective_start_ms,
+            duration_ms,
+        )
+        transcript = transcribe_video(
+            transcript_source_path,
+            openai_api_key,
+            temp_dir,
+            duration_ms,
+        )
+        subtitles = transcript_for_cut(transcript, 0, duration_ms)
+    else:
+        try:
+            transcript = transcript_from_payload(cut_request.transcript_payload)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        subtitles = transcript_for_cut(
+            transcript,
+            effective_start_ms,
+            effective_end_ms,
+        )
+
+    output_path = temp_dir / "clipmind-cut.mp4"
+    render_cut_with_subtitles(
+        cut_request.video_path,
+        output_path,
+        subtitles,
+        cut_request.preset,
+        effective_start_ms,
+        duration_ms,
+        temp_dir,
+    )
+    validate_rendered_video(output_path, duration_ms)
+    return output_path, duration_ms
+
+
+def _render_thumbnail_response_file(
+    thumbnail_request: ThumbnailRequest,
+    temp_dir: Path,
+) -> Path:
+    source_duration_ms = probe_video_duration_ms(thumbnail_request.video_path)
+    if thumbnail_request.timestamp_ms >= source_duration_ms:
+        raise HTTPException(
+            status_code=422,
+            detail="timestamp_ms is outside the source video duration.",
+        )
+
+    output_path = temp_dir / "clipmind-thumbnail.jpg"
+    render_thumbnail_frame(
+        thumbnail_request.video_path,
+        output_path,
+        thumbnail_request.timestamp_ms,
+    )
+    return output_path
+
+
+def _download_cut_fallback(cut_request: CutRequest, temp_dir: Path) -> CutRequest:
+    if cut_request.source_url is None:
+        raise RuntimeError("cut fallback requires source_url.")
+    video_path = _download_source_url(
+        cut_request.source_url,
+        temp_dir,
+        MAX_CANDIDATES_SOURCE_BYTES,
+    )
+    return CutRequest(
+        video_path=video_path,
+        source_url=None,
+        preset=cut_request.preset,
+        start_ms=cut_request.start_ms,
+        end_ms=cut_request.end_ms,
+        trim_start_ms=cut_request.trim_start_ms,
+        trim_end_ms=cut_request.trim_end_ms,
+        transcript_payload=cut_request.transcript_payload,
+    )
+
+
+def _download_thumbnail_fallback(
+    thumbnail_request: ThumbnailRequest,
+    temp_dir: Path,
+) -> ThumbnailRequest:
+    if thumbnail_request.source_url is None:
+        raise RuntimeError("thumbnail fallback requires source_url.")
+    video_path = _download_source_url(
+        thumbnail_request.source_url,
+        temp_dir,
+        MAX_CANDIDATES_SOURCE_BYTES,
+    )
+    return ThumbnailRequest(
+        video_path=video_path,
+        source_url=None,
+        timestamp_ms=thumbnail_request.timestamp_ms,
+    )
+
+
+def _render_output_http_exception(error: RenderOutputValidationError) -> HTTPException:
+    return HTTPException(
+        status_code=500,
+        detail={
+            "code": error.code,
+            "message": str(error),
+        },
+    )
 
 
 def _transcript_to_response(transcript: Transcript) -> dict[str, object]:
@@ -406,6 +595,7 @@ async def _parse_cut_request(request: Request, temp_dir: Path) -> CutRequest:
         if not isinstance(raw_source_url, str) or not raw_source_url.strip():
             raise HTTPException(status_code=422, detail="source_url is required.")
         source_url = raw_source_url.strip()
+        _validate_source_url(source_url)
         payload = body
         transcript_payload = body.get("transcript")
     else:
@@ -439,16 +629,25 @@ async def _parse_cut_request(request: Request, temp_dir: Path) -> CutRequest:
         raise HTTPException(status_code=422, detail="trim offsets must be non-negative.")
     if start_ms + trim_start_ms >= end_ms - trim_end_ms:
         raise HTTPException(status_code=422, detail="trim offsets remove the full window.")
+    if end_ms - trim_end_ms - start_ms - trim_start_ms > MAX_CUT_WINDOW_MS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "cut window is too long. "
+                f"Maximum is {MAX_CUT_WINDOW_MS}ms."
+            ),
+        )
 
     if upload is not None:
         video_path = await _save_upload_file(upload, temp_dir, "upload")
     elif source_url is not None:
-        video_path = _download_source_url(source_url, temp_dir)
+        video_path = source_url
     else:
         raise HTTPException(status_code=422, detail="video source is required.")
 
     return CutRequest(
         video_path=video_path,
+        source_url=source_url,
         preset=preset,
         start_ms=start_ms,
         end_ms=end_ms,
@@ -468,6 +667,7 @@ async def _parse_thumbnail_request(request: Request, temp_dir: Path) -> Thumbnai
             raise HTTPException(status_code=422, detail="multipart field file is required.")
         timestamp_ms = _required_int(form, "timestamp_ms")
         video_path = await _save_upload_file(upload, temp_dir, "upload")
+        source_url = None
     elif content_type.startswith("application/json"):
         body = await request.json()
         if not isinstance(body, dict):
@@ -476,7 +676,9 @@ async def _parse_thumbnail_request(request: Request, temp_dir: Path) -> Thumbnai
         if not isinstance(raw_source_url, str) or not raw_source_url.strip():
             raise HTTPException(status_code=422, detail="source_url is required.")
         timestamp_ms = _required_int(body, "timestamp_ms")
-        video_path = _download_source_url(raw_source_url.strip(), temp_dir)
+        source_url = raw_source_url.strip()
+        _validate_source_url(source_url)
+        video_path = source_url
     else:
         raise HTTPException(
             status_code=415,
@@ -486,7 +688,11 @@ async def _parse_thumbnail_request(request: Request, temp_dir: Path) -> Thumbnai
     if timestamp_ms < 0:
         raise HTTPException(status_code=422, detail="timestamp_ms must be non-negative.")
 
-    return ThumbnailRequest(video_path=video_path, timestamp_ms=timestamp_ms)
+    return ThumbnailRequest(
+        video_path=video_path,
+        source_url=source_url,
+        timestamp_ms=timestamp_ms,
+    )
 
 
 def _transcript_from_form(form: Mapping[str, Any]) -> object | None:
@@ -588,11 +794,55 @@ def _yt_blocked_http_exception() -> HTTPException:
     )
 
 
-def _download_source_url(source_url: str, temp_dir: Path) -> Path:
+def _content_length(request: Request) -> int | None:
+    raw_value = request.headers.get("content-length")
+    if raw_value is None:
+        return None
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return None
+    if value < 0:
+        return None
+    return value
+
+
+def _multipart_too_large_detail() -> dict[str, object]:
+    return {
+        "code": "multipart_upload_too_large",
+        "message": "multipart upload body is too large.",
+        "max_bytes": MAX_MULTIPART_UPLOAD_BYTES,
+    }
+
+
+def _multipart_too_large_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=413,
+        content={"detail": _multipart_too_large_detail()},
+    )
+
+
+def _source_too_large_detail(max_bytes: int) -> dict[str, object]:
+    return {
+        "code": "source_url_too_large",
+        "message": "source_url is too large.",
+        "max_bytes": max_bytes,
+    }
+
+
+def _validate_source_url(source_url: str) -> urllib.parse.ParseResult:
     parsed = urllib.parse.urlparse(source_url)
     if parsed.scheme not in {"http", "https"}:
         raise HTTPException(status_code=422, detail="source_url must use http or https.")
+    return parsed
 
+
+def _download_source_url(
+    source_url: str,
+    temp_dir: Path,
+    max_bytes: int,
+) -> Path:
+    parsed = _validate_source_url(source_url)
     suffix = Path(parsed.path).suffix or ".mp4"
     video_path = temp_dir / f"source{suffix}"
     request = urllib.request.Request(
@@ -602,16 +852,33 @@ def _download_source_url(source_url: str, temp_dir: Path) -> Path:
 
     try:
         with urllib.request.urlopen(request, timeout=45) as response:
+            content_length = response.headers.get("Content-Length")
+            if content_length is not None:
+                try:
+                    declared_size = int(content_length)
+                except ValueError:
+                    declared_size = None
+                if declared_size is not None and declared_size > max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=_source_too_large_detail(max_bytes),
+                    )
+
             total = 0
             with video_path.open("wb") as output:
                 while chunk := response.read(1024 * 1024):
                     total += len(chunk)
-                    if total > MAX_DOWNLOAD_BYTES:
-                        raise HTTPException(status_code=413, detail="source_url is too large.")
+                    if total > max_bytes:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=_source_too_large_detail(max_bytes),
+                        )
                     output.write(chunk)
     except HTTPException:
+        video_path.unlink(missing_ok=True)
         raise
     except urllib.error.URLError as exc:
+        video_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="Could not download source_url.") from exc
 
     return video_path

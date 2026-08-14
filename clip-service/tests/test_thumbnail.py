@@ -60,3 +60,35 @@ def test_thumbnail_returns_jpeg_with_mocked_ffmpeg(monkeypatch) -> None:
     assert len(render_calls) == 1
     assert render_calls[0][0] is True
     assert render_calls[0][1] == 12_000
+
+
+def test_thumbnail_uses_source_url_directly(monkeypatch) -> None:
+    reset_settings_cache()
+    source_url = "https://storage.example/large-source.mp4?signature=test"
+    render_calls: list[tuple[Path | str, int]] = []
+
+    def fail_download(*args: object, **kwargs: object) -> Path:
+        raise AssertionError("/thumbnail should not download JSON source_url first.")
+
+    def fake_render(
+        source_path: Path | str,
+        output_path: Path,
+        timestamp_ms: int,
+    ) -> None:
+        render_calls.append((source_path, timestamp_ms))
+        output_path.write_bytes(b"fake jpeg")
+
+    monkeypatch.setattr(main, "_download_source_url", fail_download)
+    monkeypatch.setattr(main, "probe_video_duration_ms", lambda video_path: 50_000)
+    monkeypatch.setattr(main, "render_thumbnail_frame", fake_render)
+
+    client = TestClient(main.app)
+    response = client.post(
+        "/thumbnail",
+        headers=AUTH_HEADERS,
+        json={"source_url": source_url, "timestamp_ms": 12_000},
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"fake jpeg"
+    assert render_calls == [(source_url, 12_000)]
