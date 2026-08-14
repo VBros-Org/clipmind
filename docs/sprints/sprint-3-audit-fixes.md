@@ -62,7 +62,7 @@ Out of scope for the whole sprint (do not creep): auto-posting, GPU/vision candi
 - Replace the single 2 GB XHR through the Worker with presigned multipart upload direct to R2: resumable, cancel button, per-part retry. Bytes are reconciled server-side on completion (mismatch = delete + 400); no client-declared ContentLength trusted.
 - Orphan handling: upload intents recorded so abandoned parts/objects are reconciled (pairs with T13 deletion ordering).
 - `/upload` lists all non-done videos, not newest-3, so every failed video is reachable for retry/delete.
-- **LIVE PROBE (do first, it shapes the ticket):** one controlled ~150 MB upload via `clipmind.gitm.gg` vs the railway.app origin to confirm or kill the Unverified ~100 MB Worker cap. Record the result in the PR. *(George 2026-08-14: approved, the loop runs it.)*
+- **LIVE PROBE RESULT (run 2026-08-14, unauthenticated 150 MB POST so zero pipeline cost): CAP CONFIRMED.** Worker path `clipmind.gitm.gg` → HTTP 413 in 2.6 s after ~1.2 MB sent (Cloudflare edge rejects on declared Content-Length). Railway origin → HTTP 401 (app answered; body size fine without the Worker). The presigned-multipart rebuild is mandatory: today's live domain cannot accept uploads over ~100 MB at all.
 - **Gate:** real >100 MB file uploads successfully from a phone-class browser through the live domain path; cancel and resume both proven; byte-mismatch test rejects; failed 4th-newest video visible and retryable.
 
 ## T7 — Clip service: long-source handling + output validation [P1]
