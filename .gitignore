@@ -21,3 +21,14 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# Audit/verification evidence dirs (session artifacts, not source)
+/t[0-9]*/
+
+# Build/test artifacts
+app/tsconfig.tsbuildinfo
+app/test-results/
+app/playwright-report/
+app/.pytest_cache/
+clip-service/.pytest_cache/
+media_cache/

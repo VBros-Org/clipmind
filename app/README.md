@@ -24,3 +24,11 @@ The source icon lives at `public/icons/clipmind-icon.svg`. The checked-in PNG ic
 Run `npm run test:e2e` from `app/` against a migrated test database. The Playwright config runs `next build`, seeds one creator with an access code, starts `next start`, logs in through `/login`, then verifies Home, Review, and Rhythm render from Postgres data.
 
 This deliberately does not run the upload pipeline, clip-service calls, Minds calls, OpenAI calls, accept scheduling, or the post sheet. Those need external APIs or heavier media fixtures and stay out of CI for this sprint gate.
+
+## Access codes
+
+Access codes are stored in plaintext by design for the jam: the session
+cookie carries the code itself and Rhythm can re-display it, both of which
+compare against the stored value. Login is rate limited per IP
+(lib/rate-limit.ts). Revisit (hash + server session ids) before any
+public launch.
