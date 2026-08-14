@@ -62,7 +62,7 @@ Out of scope for the whole sprint (do not creep): auto-posting, GPU/vision candi
 - Replace the single 2 GB XHR through the Worker with presigned multipart upload direct to R2: resumable, cancel button, per-part retry. Bytes are reconciled server-side on completion (mismatch = delete + 400); no client-declared ContentLength trusted.
 - Orphan handling: upload intents recorded so abandoned parts/objects are reconciled (pairs with T13 deletion ordering).
 - `/upload` lists all non-done videos, not newest-3, so every failed video is reachable for retry/delete.
-- **LIVE PROBE (do first, it shapes the ticket):** one controlled ~150 MB upload via `clipmind.gitm.gg` vs the railway.app origin to confirm or kill the Unverified ~100 MB Worker cap. Record the result in the PR.
+- **LIVE PROBE (do first, it shapes the ticket):** one controlled ~150 MB upload via `clipmind.gitm.gg` vs the railway.app origin to confirm or kill the Unverified ~100 MB Worker cap. Record the result in the PR. *(George 2026-08-14: approved, the loop runs it.)*
 - **Gate:** real >100 MB file uploads successfully from a phone-class browser through the live domain path; cancel and resume both proven; byte-mismatch test rejects; failed 4th-newest video visible and retryable.
 
 ## T7 — Clip service: long-source handling + output validation [P1]
@@ -117,7 +117,7 @@ Out of scope for the whole sprint (do not creep): auto-posting, GPU/vision candi
 ## T13 — Storage + media policy [P2 + decision]
 **Evidence:** N28, N29 (T6 overlap), K3 delete-order; Codex gstatic import; `app/lib/storage.ts:96-105`, `app/lib/video-api.ts:280`.
 
-- **HUMAN GATE (George): media privacy decision** — rendered clips/thumbnails are world-readable by cuid URL today. Accept-for-jam (record it) or presign media reads. Build follows the decision.
+- **DECIDED 2026-08-14 (George, on Claude's advice): rendered media stays public-by-link for the jam.** Rationale: cuid keys are unguessable and unenumerable (no bucket listing), the user pool is invite-gated and tiny, and presigning media reads would break or complicate the share sheet, push payload URLs, and long-hold-save flows for zero jam benefit. Sources stay presigned-private as today. Revisit before any public launch: presign media reads or move renders behind an authed proxy route. No presign build work in this sprint.
 - Deletion is DB-first: re-check guards inside the transaction before R2 object removal; add an orphan-reconciliation script for R2 objects with no DB row.
 - Bundle Firebase SW code locally (no origin-privileged `gstatic.com` import); add baseline security headers (CSP, nosniff, frame-ancestors, Permissions-Policy); stop returning raw `pipelineError` internals to the browser; trim stable-identifier logging in taste sync.
 - **Gate:** deletion race test (posted-guard holds); orphan script proven on a seeded orphan; headers visible on live responses after deploy.
@@ -135,7 +135,7 @@ Out of scope for the whole sprint (do not creep): auto-posting, GPU/vision candi
 **Evidence:** Grok leg; K3 access-code items.
 
 - Update registry entry `clipmind`: purpose (no Telegram, PWA in-app), `status: active`, note the Cloudflare Worker in the architecture line.
-- **HUMAN GATE (George): mint the Railway project token** (dashboard-only) → keychain `clipmind-railway-token`; registry `token_ref` goes live.
+- **DECIDED 2026-08-14 (George): no Railway project token for now** — CLI personal login (`sinksanksunk23`) carries deploys. Registry stays `personal_login`, `token_ref` stays pending-by-choice. Revisit only if deploys need to run where the CLI session is absent.
 - `.gitignore` the `t13/`–`t29/` evidence dirs (or relocate to the audit vault); chmod `app/.env` to 0600; mixed cache dirs ignored.
 - Access-code hardening within jam scope: route-level rate limiting on login; document that codes are plaintext-by-design for the jam (or hash if trivial).
 - Verify GitHub auth/branch protection/committer identity (audit left these Unverified).
