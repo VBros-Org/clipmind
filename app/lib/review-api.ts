@@ -399,6 +399,7 @@ function serializeClip(clip: {
   renderError: string | null;
   thumbUrl: string | null;
   postCopyVariants: unknown;
+  scheduledFor: Date | null;
   transcript: string | null;
   mindRank: number | null;
   mindRankReason: string | null;
@@ -416,6 +417,7 @@ function serializeClip(clip: {
     renderError: clip.renderError,
     thumbUrl: clip.thumbUrl,
     postCopyVariants: clip.postCopyVariants,
+    scheduledFor: clip.scheduledFor?.toISOString() ?? null,
     transcript: clip.transcript,
     mindRank: clip.mindRank,
     mindRankReason: clip.mindRankReason,

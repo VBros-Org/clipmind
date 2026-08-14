@@ -47,6 +47,7 @@ export type ReviewClip = {
   renderError: string | null;
   thumbUrl: string | null;
   postCopyVariants: PostCopyVariants | null;
+  scheduledFor: Date | null;
   transcript: string | null;
   mindRank: number | null;
   mindRankReason: string | null;
@@ -176,6 +177,7 @@ export async function loadReviewVideo(
           renderedUrl: true,
           renderFailedAt: true,
           renderError: true,
+          scheduledFor: true,
           thumbKey: true,
           postCopyVariants: true,
           transcript: true,
@@ -287,6 +289,7 @@ export async function loadReviewClip(
       renderedUrl: true,
       renderFailedAt: true,
       renderError: true,
+      scheduledFor: true,
       thumbKey: true,
       postCopyVariants: true,
       transcript: true,
@@ -664,6 +667,7 @@ const reviewClipSelect = {
   renderedUrl: true,
   renderFailedAt: true,
   renderError: true,
+  scheduledFor: true,
   thumbKey: true,
   postCopyVariants: true,
   transcript: true,
@@ -682,6 +686,7 @@ function toReviewClip(clip: {
   renderedUrl: string | null;
   renderFailedAt: Date | null;
   renderError: string | null;
+  scheduledFor: Date | null;
   thumbKey: string | null;
   postCopyVariants: Prisma.JsonValue;
   transcript: string | null;
@@ -699,6 +704,7 @@ function toReviewClip(clip: {
     renderedUrl: clip.renderedUrl,
     renderFailedAt: clip.renderFailedAt,
     renderError: clip.renderError,
+    scheduledFor: clip.scheduledFor,
     thumbUrl: publicMediaUrlForKey(clip.thumbKey),
     postCopyVariants: toPostCopyVariants(clip.postCopyVariants),
     transcript: clip.transcript,
@@ -769,6 +775,7 @@ function toReviewVideoGroup(video: {
     renderedUrl: string | null;
     renderFailedAt: Date | null;
     renderError: string | null;
+    scheduledFor: Date | null;
     thumbKey: string | null;
     postCopyVariants: Prisma.JsonValue;
     transcript: string | null;

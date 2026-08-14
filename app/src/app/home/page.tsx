@@ -139,7 +139,7 @@ function NextUpCard({
         <p className={styles.captionState}>
           {nextUp.hasCaptions ? "Captions ready" : "Captions pending"}
         </p>
-        <Link className={styles.openClip} href={`/review?clip=${nextUp.id}`}>
+        <Link className={styles.openClip} href={`/home?post=${nextUp.id}`}>
           Open clip
         </Link>
       </div>

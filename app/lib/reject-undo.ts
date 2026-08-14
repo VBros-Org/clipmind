@@ -20,7 +20,8 @@ type RejectUndoTimerOptions = {
 
 type PendingReject = {
   deadlineMs: number;
-  timer: TimerHandle;
+  remainingMs: number | null;
+  timer: TimerHandle | null;
 };
 
 export class RejectUndoTimer {
@@ -51,6 +52,7 @@ export class RejectUndoTimer {
     }, this.windowMs);
     this.pending.set(clipId, {
       deadlineMs,
+      remainingMs: null,
       timer,
     });
 
@@ -67,7 +69,9 @@ export class RejectUndoTimer {
       return false;
     }
 
-    this.clearTimeoutImpl(pending.timer);
+    if (pending.timer !== null) {
+      this.clearTimeoutImpl(pending.timer);
+    }
     this.pending.delete(clipId);
     return true;
   }
@@ -78,7 +82,9 @@ export class RejectUndoTimer {
       return false;
     }
 
-    this.clearTimeoutImpl(pending.timer);
+    if (pending.timer !== null) {
+      this.clearTimeoutImpl(pending.timer);
+    }
     this.pending.delete(clipId);
     this.options.commit(clipId, cause);
     return true;
@@ -92,6 +98,47 @@ export class RejectUndoTimer {
     return clipIds;
   }
 
+  clearAll(): string[] {
+    const clipIds = [...this.pending.keys()];
+    for (const clipId of clipIds) {
+      this.undo(clipId);
+    }
+    return clipIds;
+  }
+
+  pauseAll(): RejectUndoSnapshot[] {
+    for (const pending of this.pending.values()) {
+      if (pending.remainingMs !== null) {
+        continue;
+      }
+
+      if (pending.timer !== null) {
+        this.clearTimeoutImpl(pending.timer);
+      }
+      pending.timer = null;
+      pending.remainingMs = Math.max(0, pending.deadlineMs - this.now());
+    }
+
+    return this.snapshots();
+  }
+
+  resumeAll(): RejectUndoSnapshot[] {
+    for (const [clipId, pending] of this.pending.entries()) {
+      if (pending.remainingMs === null) {
+        continue;
+      }
+
+      const remainingMs = pending.remainingMs;
+      pending.deadlineMs = this.now() + remainingMs;
+      pending.remainingMs = null;
+      pending.timer = this.setTimeoutImpl(() => {
+        this.commitNow(clipId, "timer");
+      }, remainingMs);
+    }
+
+    return this.snapshots();
+  }
+
   snapshot(clipId: string): RejectUndoSnapshot | null {
     const pending = this.pending.get(clipId);
     if (!pending) {
@@ -101,7 +148,8 @@ export class RejectUndoTimer {
     return {
       clipId,
       deadlineMs: pending.deadlineMs,
-      remainingMs: Math.max(0, pending.deadlineMs - this.now()),
+      remainingMs:
+        pending.remainingMs ?? Math.max(0, pending.deadlineMs - this.now()),
     };
   }
 

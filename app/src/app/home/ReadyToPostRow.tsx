@@ -15,6 +15,11 @@ import {
   sharePreparedVideoFile,
   type PreparedVideoShareNavigator,
 } from "../../../lib/share-prepared-video";
+import {
+  formatMediaPreparationProgress,
+  saveDisabledReason,
+  type MediaPreparationProgress,
+} from "../../../lib/post-media-prep";
 import styles from "./home.module.css";
 
 type Platform = "youtube" | "tiktok" | "instagram";
@@ -42,6 +47,12 @@ const PLATFORMS: { id: Platform; label: string }[] = [
   { id: "tiktok", label: "TikTok" },
   { id: "instagram", label: "Instagram" },
 ];
+
+type PreparedMedia = {
+  canShareVideo: boolean;
+  file: File;
+  objectUrl: string;
+};
 
 export function ReadyToPostRow({
   clips,
@@ -191,23 +202,44 @@ function PostSheet({
   markLocalPosted: (clipId: string, postedThisWeek: number | null) => void;
 }) {
   const [copyState, setCopyState] = useState<Platform | null>(null);
+  const [copyFallbackPlatform, setCopyFallbackPlatform] =
+    useState<Platform | null>(null);
   const [isPosting, setIsPosting] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
   const [isPreparingVideo, setIsPreparingVideo] = useState(false);
-  const [preparedFile, setPreparedFile] = useState<File | null>(null);
-  const [canShareVideo, setCanShareVideo] = useState(false);
+  const [preparedMedia, setPreparedMedia] = useState<PreparedMedia | null>(null);
+  const [prepareProgress, setPrepareProgress] =
+    useState<MediaPreparationProgress>({
+      loadedBytes: 0,
+      totalBytes: null,
+    });
   const [shareFallback, setShareFallback] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const canPost = Boolean(clip.renderedUrl);
+  const preparedFile = preparedMedia?.file ?? null;
+  const canShareVideo = preparedMedia?.canShareVideo ?? false;
+  const disabledSaveReason = saveDisabledReason({
+    canPost,
+    canShareVideo,
+    hasPreparedFile: Boolean(preparedFile),
+    isPreparingVideo,
+    progress: prepareProgress,
+  });
 
   useEffect(() => {
     const renderedUrl = clip.renderedUrl;
     const controller = new AbortController();
     let cancelled = false;
+    let objectUrl: string | null = null;
 
-    setPreparedFile(null);
-    setCanShareVideo(false);
+    setPreparedMedia(null);
+    setPrepareProgress({
+      loadedBytes: 0,
+      totalBytes: null,
+    });
     setShareFallback(false);
+    setCopyState(null);
+    setCopyFallbackPlatform(null);
     setError(null);
 
     if (!renderedUrl) {
@@ -230,11 +262,16 @@ function PostSheet({
           throw new Error("Video download failed.");
         }
 
-        const blob = await response.blob();
+        const blob = await readPreparedVideoBlob(response, (progress) => {
+          if (!cancelled) {
+            setPrepareProgress(progress);
+          }
+        });
         if (cancelled) {
           return;
         }
 
+        objectUrl = URL.createObjectURL(blob);
         const file = new File([blob], `clipmind-${clip.id}.mp4`, {
           type: blob.type || "video/mp4",
         });
@@ -243,8 +280,11 @@ function PostSheet({
           file,
         );
 
-        setPreparedFile(file);
-        setCanShareVideo(nextCanShare);
+        setPreparedMedia({
+          canShareVideo: nextCanShare,
+          file,
+          objectUrl,
+        });
         setShareFallback(!nextCanShare);
       } catch (prepareError) {
         if (cancelled || errorName(prepareError) === "AbortError") {
@@ -265,6 +305,9 @@ function PostSheet({
     return () => {
       cancelled = true;
       controller.abort();
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
     };
   }, [clip.id, clip.renderedUrl]);
 
@@ -304,6 +347,10 @@ function PostSheet({
       return "Preparing video";
     }
 
+    if (!canShareVideo) {
+      return "Use download";
+    }
+
     if (isSharing) {
       return "Saving";
     }
@@ -316,15 +363,19 @@ function PostSheet({
       return "The rendered MP4 is not ready yet.";
     }
 
+    if (!preparedMedia) {
+      return "Video prep failed. Use Download.";
+    }
+
     if (!canShareVideo) {
-      return "Download saves this MP4 to Files, not Photos.";
+      return "This browser cannot save directly.";
     }
 
     return "Save did not work in this browser.";
   }
 
   function showDownloadButton() {
-    return Boolean(canPost && shareFallback && !canShareVideo);
+    return Boolean(canPost && shareFallback && (!canShareVideo || !preparedMedia));
   }
 
   function errorName(error: unknown): string | null {
@@ -341,9 +392,12 @@ function PostSheet({
     try {
       await navigator.clipboard.writeText(caption);
       setCopyState(platform);
+      setCopyFallbackPlatform(null);
       setError(null);
     } catch {
-      setError("Copy failed.");
+      setCopyState(null);
+      setCopyFallbackPlatform(platform);
+      setError("Copy it manually below.");
     }
   }
 
@@ -394,7 +448,7 @@ function PostSheet({
 
       <div className={styles.postBody}>
         <div className={styles.postPlayerWrap}>
-          {clip.renderedUrl ? (
+          {preparedMedia ? (
             <video
               className={styles.postPlayer}
               controls
@@ -402,10 +456,14 @@ function PostSheet({
               playsInline
               poster={clip.thumbUrl ?? undefined}
               preload="metadata"
-              src={clip.renderedUrl}
+              src={preparedMedia.objectUrl}
             />
           ) : (
-            <p className={styles.playerFallback}>Rendered video is still loading.</p>
+            <p className={styles.playerFallback}>
+              {clip.renderedUrl
+                ? formatMediaPreparationProgress(prepareProgress)
+                : "Rendered video is still loading."}
+            </p>
           )}
         </div>
 
@@ -419,18 +477,22 @@ function PostSheet({
           >
             {saveButtonLabel()}
           </button>
-          {preparedFile && canShareVideo ? (
+          {disabledSaveReason ? (
+            <p className={styles.saveHint} data-testid="save-disabled-reason">
+              {disabledSaveReason}
+            </p>
+          ) : preparedFile && canShareVideo ? (
             <p className={styles.saveHint}>choose Save Video to add it to Photos.</p>
           ) : null}
         </div>
         {shareFallback ? (
           <div className={styles.downloadFallbackRow}>
             <p className={styles.postNotice}>{downloadFallbackCopy()}</p>
-            {showDownloadButton() && clip.renderedUrl ? (
+            {showDownloadButton() && (preparedMedia?.objectUrl || clip.renderedUrl) ? (
               <a
                 className={styles.downloadLink}
                 download
-                href={clip.renderedUrl}
+                href={preparedMedia?.objectUrl ?? clip.renderedUrl ?? ""}
               >
                 Download
               </a>
@@ -447,6 +509,18 @@ function PostSheet({
                   <p className={styles.captionText}>
                     {clip.postCopyVariants?.[platform.id]}
                   </p>
+                  {copyFallbackPlatform === platform.id ? (
+                    <textarea
+                      aria-label={`${platform.label} caption fallback`}
+                      className={styles.copyFallbackText}
+                      data-testid="post-caption-copy-fallback"
+                      onClick={(event) => event.currentTarget.select()}
+                      onFocus={(event) => event.currentTarget.select()}
+                      readOnly
+                      rows={4}
+                      value={clip.postCopyVariants?.[platform.id] ?? ""}
+                    />
+                  ) : null}
                 </div>
                 <button
                   className={styles.copyButton}
@@ -479,6 +553,59 @@ function PostSheet({
       </div>
     </section>
   );
+}
+
+async function readPreparedVideoBlob(
+  response: Response,
+  onProgress: (progress: MediaPreparationProgress) => void,
+): Promise<Blob> {
+  const totalBytes = parseContentLength(response.headers.get("content-length"));
+  const contentType = response.headers.get("content-type") || "video/mp4";
+
+  onProgress({
+    loadedBytes: 0,
+    totalBytes,
+  });
+
+  if (!response.body) {
+    const blob = await response.blob();
+    onProgress({
+      loadedBytes: blob.size,
+      totalBytes: blob.size || totalBytes,
+    });
+    return blob;
+  }
+
+  const reader = response.body.getReader();
+  const chunks: BlobPart[] = [];
+  let loadedBytes = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+
+    chunks.push(value);
+    loadedBytes += value.byteLength;
+    onProgress({
+      loadedBytes,
+      totalBytes,
+    });
+  }
+
+  return new Blob(chunks, {
+    type: contentType,
+  });
+}
+
+function parseContentLength(value: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function writePostToUrl(clipId: string | null) {
