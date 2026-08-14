@@ -27,6 +27,7 @@ model Creator {
   createdAt         DateTime           @default(now())
   inviteCode        InviteCode?
   videos            Video[]
+  uploadIntents     UploadIntent[]
   clips             Clip[]
   schedule          Schedule?
   pushSubscriptions PushSubscription[]
@@ -56,6 +57,29 @@ model Video {
   pipelineRetryGeneration Int      @default(0)
   createdAt               DateTime @default(now())
   clips                   Clip[]
+}
+
+model UploadIntent {
+  id                String   @id @default(cuid())
+  creatorId         String
+  creator           Creator  @relation(fields: [creatorId], references: [id])
+  videoId           String?  @unique
+  sourceKey         String   @unique
+  uploadId          String?
+  fileName          String?
+  contentType       String
+  declaredSizeBytes BigInt
+  partSizeBytes     Int
+  status            String   @default("creating") // creating | uploading | completed | aborted | failed
+  failureReason     String?  @db.VarChar(500)
+  createdAt         DateTime @default(now())
+  lastActivityAt    DateTime @default(now())
+  completedAt       DateTime?
+  abortedAt         DateTime?
+
+  @@unique([sourceKey, uploadId])
+  @@index([creatorId, status, lastActivityAt])
+  @@index([status, lastActivityAt])
 }
 
 enum ClipStatus {

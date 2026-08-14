@@ -2,10 +2,18 @@ import { createReadStream } from "node:fs";
 import { randomUUID } from "node:crypto";
 
 import {
+  AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
+  CreateMultipartUploadCommand,
   DeleteObjectCommand,
   GetObjectCommand,
+  ListMultipartUploadsCommand,
+  ListObjectsV2Command,
+  ListPartsCommand,
   PutObjectCommand,
+  UploadPartCommand,
   S3Client,
+  type CompletedPart,
   type PutObjectCommandInput,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -24,7 +32,17 @@ export type SourceUploadOptions = {
 
 export interface S3ClientLike {
   send(
-    command: PutObjectCommand | GetObjectCommand | DeleteObjectCommand,
+    command:
+      | AbortMultipartUploadCommand
+      | CompleteMultipartUploadCommand
+      | CreateMultipartUploadCommand
+      | DeleteObjectCommand
+      | GetObjectCommand
+      | ListMultipartUploadsCommand
+      | ListObjectsV2Command
+      | ListPartsCommand
+      | PutObjectCommand
+      | UploadPartCommand,
   ): Promise<unknown>;
 }
 
@@ -34,10 +52,17 @@ export type SourcePresigner = (
   expiresInSeconds: number,
 ) => Promise<string>;
 
+export type SourcePartPresigner = (
+  client: S3ClientLike,
+  command: UploadPartCommand,
+  expiresInSeconds: number,
+) => Promise<string>;
+
 export type R2StorageOptions = {
   env?: StorageEnv;
   s3Client?: S3ClientLike;
   presignSource?: SourcePresigner;
+  presignSourcePart?: SourcePartPresigner;
 };
 
 export interface R2Storage {
@@ -46,13 +71,56 @@ export interface R2Storage {
     localPathOrStream: SourceUploadInput,
     options?: SourceUploadOptions,
   ): Promise<string>;
+  createSourceMultipartUpload(input: {
+    key: string;
+    contentType: string;
+  }): Promise<{ uploadId: string }>;
+  presignSourcePartUpload(input: {
+    key: string;
+    uploadId: string;
+    partNumber: number;
+    ttlSeconds?: number;
+  }): Promise<string>;
+  listSourceUploadParts(input: {
+    key: string;
+    uploadId: string;
+  }): Promise<SourceUploadPart[]>;
+  completeSourceMultipartUpload(input: {
+    key: string;
+    uploadId: string;
+    parts: SourceUploadPart[];
+  }): Promise<void>;
+  abortSourceMultipartUpload(input: {
+    key: string;
+    uploadId: string;
+  }): Promise<void>;
   presignSourceUrl(key: string, ttlSeconds?: number): Promise<string>;
   uploadRender(clipId: string, stream: StorageUploadBody): Promise<string>;
   uploadThumbnail(clipId: string, stream: StorageUploadBody): Promise<string>;
   deleteSource(key: string): Promise<void>;
   deleteMediaObject(key: string): Promise<void>;
+  listSourceMultipartUploads(prefix?: string): Promise<SourceMultipartUpload[]>;
+  listSourceObjects(prefix?: string): Promise<SourceObject[]>;
   probeBuckets(): Promise<StorageProbeResult[]>;
 }
+
+export type SourceUploadPart = {
+  partNumber: number;
+  size: number;
+  etag: string;
+};
+
+export type SourceMultipartUpload = {
+  key: string;
+  uploadId: string;
+  initiated: Date | null;
+};
+
+export type SourceObject = {
+  key: string;
+  size: number;
+  lastModified: Date | null;
+};
 
 export type StorageProbeResult = {
   bucket: string;
@@ -68,6 +136,7 @@ export function createR2Storage(options: R2StorageOptions = {}): R2Storage {
   const storageEnv = options.env ?? requireStorageEnv();
   const s3Client = options.s3Client ?? createR2Client(storageEnv);
   const presignSource = options.presignSource ?? defaultSourcePresigner;
+  const presignSourcePart = options.presignSourcePart ?? defaultSourcePartPresigner;
 
   return {
     async uploadSource(videoId, localPathOrStream, uploadOptions = {}) {
@@ -80,6 +149,67 @@ export function createR2Storage(options: R2StorageOptions = {}): R2Storage {
         ContentLength: uploadOptions.contentLength,
       });
       return key;
+    },
+
+    async createSourceMultipartUpload(input) {
+      const result = (await s3Client.send(
+        new CreateMultipartUploadCommand({
+          Bucket: storageEnv.R2_SOURCES_BUCKET,
+          Key: input.key,
+          ContentType: input.contentType,
+        }),
+      )) as { UploadId?: string };
+
+      const uploadId = result.UploadId?.trim();
+      if (!uploadId) {
+        throw new Error(`R2 did not return a multipart upload id for ${input.key}.`);
+      }
+
+      return { uploadId };
+    },
+
+    async presignSourcePartUpload(input) {
+      return presignSourcePart(
+        s3Client,
+        new UploadPartCommand({
+          Bucket: storageEnv.R2_SOURCES_BUCKET,
+          Key: input.key,
+          UploadId: input.uploadId,
+          PartNumber: input.partNumber,
+        }),
+        input.ttlSeconds ?? DEFAULT_SOURCE_PRESIGN_TTL_SECONDS,
+      );
+    },
+
+    async listSourceUploadParts(input) {
+      return listUploadParts(
+        s3Client,
+        storageEnv.R2_SOURCES_BUCKET,
+        input.key,
+        input.uploadId,
+      );
+    },
+
+    async completeSourceMultipartUpload(input) {
+      await s3Client.send(
+        new CompleteMultipartUploadCommand({
+          Bucket: storageEnv.R2_SOURCES_BUCKET,
+          Key: input.key,
+          UploadId: input.uploadId,
+          MultipartUpload: {
+            Parts: input.parts.map(toCompletedPart),
+          },
+        }),
+      );
+    },
+
+    async abortSourceMultipartUpload(input) {
+      await abortMultipartUpload(
+        s3Client,
+        storageEnv.R2_SOURCES_BUCKET,
+        input.key,
+        input.uploadId,
+      );
     },
 
     async presignSourceUrl(key, ttlSeconds = DEFAULT_SOURCE_PRESIGN_TTL_SECONDS) {
@@ -121,6 +251,14 @@ export function createR2Storage(options: R2StorageOptions = {}): R2Storage {
 
     async deleteMediaObject(key) {
       await deleteObject(s3Client, storageEnv.R2_MEDIA_BUCKET, key);
+    },
+
+    async listSourceMultipartUploads(prefix = "") {
+      return listMultipartUploads(s3Client, storageEnv.R2_SOURCES_BUCKET, prefix);
+    },
+
+    async listSourceObjects(prefix = "") {
+      return listObjects(s3Client, storageEnv.R2_SOURCES_BUCKET, prefix);
     },
 
     async probeBuckets() {
@@ -286,6 +424,27 @@ async function deleteObject(
   }
 }
 
+async function abortMultipartUpload(
+  s3Client: S3ClientLike,
+  bucket: string,
+  key: string,
+  uploadId: string,
+): Promise<void> {
+  try {
+    await s3Client.send(
+      new AbortMultipartUploadCommand({
+        Bucket: bucket,
+        Key: key,
+        UploadId: uploadId,
+      }),
+    );
+  } catch (error) {
+    if (!isMissingUploadError(error)) {
+      throw error;
+    }
+  }
+}
+
 async function defaultSourcePresigner(
   client: S3ClientLike,
   command: GetObjectCommand,
@@ -296,8 +455,188 @@ async function defaultSourcePresigner(
   });
 }
 
+async function defaultSourcePartPresigner(
+  client: S3ClientLike,
+  command: UploadPartCommand,
+  expiresInSeconds: number,
+): Promise<string> {
+  return getSignedUrl(client as S3Client, command, {
+    expiresIn: expiresInSeconds,
+  });
+}
+
 function publicUrlForKey(baseUrl: string, key: string): string {
   return `${baseUrl.replace(/\/$/, "")}/${key}`;
+}
+
+async function listUploadParts(
+  s3Client: S3ClientLike,
+  bucket: string,
+  key: string,
+  uploadId: string,
+): Promise<SourceUploadPart[]> {
+  const parts: SourceUploadPart[] = [];
+  let marker: string | undefined;
+
+  for (;;) {
+    const result = (await s3Client.send(
+      new ListPartsCommand({
+        Bucket: bucket,
+        Key: key,
+        UploadId: uploadId,
+        PartNumberMarker: marker,
+      }),
+    )) as {
+      IsTruncated?: boolean;
+      NextPartNumberMarker?: string;
+      Parts?: Array<{
+        PartNumber?: number;
+        Size?: number;
+        ETag?: string;
+      }>;
+    };
+
+    for (const part of result.Parts ?? []) {
+      const partNumber = part.PartNumber;
+      const size = part.Size;
+      if (
+        typeof partNumber === "number" &&
+        Number.isInteger(partNumber) &&
+        typeof size === "number" &&
+        Number.isFinite(size) &&
+        typeof part.ETag === "string" &&
+        part.ETag.trim()
+      ) {
+        parts.push({
+          partNumber,
+          size,
+          etag: part.ETag,
+        });
+      }
+    }
+
+    if (!result.IsTruncated) {
+      break;
+    }
+
+    marker = result.NextPartNumberMarker;
+    if (!marker) {
+      break;
+    }
+  }
+
+  return parts.sort((left, right) => left.partNumber - right.partNumber);
+}
+
+async function listMultipartUploads(
+  s3Client: S3ClientLike,
+  bucket: string,
+  prefix: string,
+): Promise<SourceMultipartUpload[]> {
+  const uploads: SourceMultipartUpload[] = [];
+  let keyMarker: string | undefined;
+  let uploadIdMarker: string | undefined;
+
+  for (;;) {
+    const result = (await s3Client.send(
+      new ListMultipartUploadsCommand({
+        Bucket: bucket,
+        Prefix: prefix || undefined,
+        KeyMarker: keyMarker,
+        UploadIdMarker: uploadIdMarker,
+      }),
+    )) as {
+      IsTruncated?: boolean;
+      NextKeyMarker?: string;
+      NextUploadIdMarker?: string;
+      Uploads?: Array<{
+        Key?: string;
+        UploadId?: string;
+        Initiated?: Date;
+      }>;
+    };
+
+    for (const upload of result.Uploads ?? []) {
+      const uploadId = upload.UploadId?.trim();
+      const key = upload.Key?.trim();
+      if (uploadId && key) {
+        uploads.push({
+          key,
+          uploadId,
+          initiated: upload.Initiated instanceof Date ? upload.Initiated : null,
+        });
+      }
+    }
+
+    if (!result.IsTruncated) {
+      break;
+    }
+
+    keyMarker = result.NextKeyMarker;
+    uploadIdMarker = result.NextUploadIdMarker;
+    if (!keyMarker || !uploadIdMarker) {
+      break;
+    }
+  }
+
+  return uploads;
+}
+
+async function listObjects(
+  s3Client: S3ClientLike,
+  bucket: string,
+  prefix: string,
+): Promise<SourceObject[]> {
+  const objects: SourceObject[] = [];
+  let continuationToken: string | undefined;
+
+  for (;;) {
+    const result = (await s3Client.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: prefix || undefined,
+        ContinuationToken: continuationToken,
+      }),
+    )) as {
+      IsTruncated?: boolean;
+      NextContinuationToken?: string;
+      Contents?: Array<{
+        Key?: string;
+        Size?: number;
+        LastModified?: Date;
+      }>;
+    };
+
+    for (const object of result.Contents ?? []) {
+      const key = object.Key?.trim();
+      if (key && Number.isFinite(object.Size)) {
+        objects.push({
+          key,
+          size: object.Size ?? 0,
+          lastModified:
+            object.LastModified instanceof Date ? object.LastModified : null,
+        });
+      }
+    }
+
+    if (!result.IsTruncated) {
+      break;
+    }
+
+    continuationToken = result.NextContinuationToken;
+    if (!continuationToken) {
+      break;
+    }
+  }
+
+  return objects;
+}
+
+function toCompletedPart(part: SourceUploadPart): CompletedPart {
+  return {
+    ETag: part.etag,
+    PartNumber: part.partNumber,
+  };
 }
 
 async function probeBucket(
@@ -370,5 +709,31 @@ function isMissingObjectError(error: unknown): boolean {
 
   return [candidate.name, candidate.Code, candidate.code].some(
     (value) => value === "NoSuchKey" || value === "NotFound",
+  );
+}
+
+function isMissingUploadError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const candidate = error as {
+    name?: unknown;
+    Code?: unknown;
+    code?: unknown;
+    $metadata?: {
+      httpStatusCode?: unknown;
+    };
+  };
+  const status = candidate.$metadata?.httpStatusCode;
+  if (status === 404) {
+    return true;
+  }
+
+  return [candidate.name, candidate.Code, candidate.code].some(
+    (value) =>
+      value === "NoSuchUpload" ||
+      value === "NoSuchKey" ||
+      value === "NotFound",
   );
 }

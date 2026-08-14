@@ -379,6 +379,17 @@ export async function loadUploadOverview(
     db.video.findMany({
       where: {
         creatorId,
+        NOT: {
+          OR: [
+            {
+              pipelineStage: "done",
+            },
+            {
+              pipelineStage: null,
+              status: "clipped",
+            },
+          ],
+        },
       },
       orderBy: [
         {
@@ -388,7 +399,6 @@ export async function loadUploadOverview(
           id: "asc",
         },
       ],
-      take: 3,
       select: {
         id: true,
         status: true,
