@@ -54,23 +54,6 @@ export function consumePostedWin(
   }
 }
 
-export function startOfUtcWeek(date: Date): Date {
-  assertValidDate(date, "date");
-  const start = new Date(
-    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
-  );
-  const day = start.getUTCDay();
-  const mondayOffset = day === 0 ? 6 : day - 1;
-  start.setUTCDate(start.getUTCDate() - mondayOffset);
-  return start;
-}
-
 function safeCount(value: number): number {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
-}
-
-function assertValidDate(value: Date, label: string): void {
-  if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
-    throw new Error(`${label} must be a valid Date.`);
-  }
 }

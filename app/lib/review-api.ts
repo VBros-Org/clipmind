@@ -119,7 +119,8 @@ export async function handleAcceptClip(
       }
     }
 
-    const schedulePass = await runSchedulePass(session.creatorId, new Date(), {
+    const scheduleNow = options.now ?? new Date();
+    const schedulePass = await runSchedulePass(session.creatorId, scheduleNow, {
       prismaClient: options.prismaClient,
     });
     const scheduledClip = await loadClipAfterSchedulePass(
@@ -135,7 +136,7 @@ export async function handleAcceptClip(
       {
         prismaClient: options.prismaClient,
         onRenderComplete: () =>
-          runSchedulePass(session.creatorId, new Date(), {
+          runSchedulePass(session.creatorId, options.now ?? new Date(), {
             prismaClient: options.prismaClient,
           }).then(() => undefined),
       },
@@ -182,7 +183,7 @@ export async function handleRetryClipRender(
       {
         prismaClient: options.prismaClient,
         onRenderComplete: () =>
-          runSchedulePass(session.creatorId, new Date(), {
+          runSchedulePass(session.creatorId, options.now ?? new Date(), {
             prismaClient: options.prismaClient,
           }).then(() => undefined),
       },

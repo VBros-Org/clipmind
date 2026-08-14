@@ -193,6 +193,58 @@ test("computeNextSlot consumes explicit quarter-hour slot times", () => {
   );
 });
 
+test("computeNextSlot resolves slot times in the creator timezone", () => {
+  const cadence = {
+    slotsPerDay: 2,
+    anchorHour: 9,
+    slotTimes: ["09:15", "19:45"],
+    lastScheduledAt: null,
+  };
+
+  assert.equal(
+    computeNextSlot(
+      cadence,
+      date("2026-07-27T01:00:00.000Z"),
+      "Asia/Bangkok",
+    ).toISOString(),
+    "2026-07-27T02:15:00.000Z",
+  );
+  assert.equal(
+    computeNextSlot(
+      cadence,
+      date("2026-07-27T03:00:00.000Z"),
+      "Asia/Bangkok",
+    ).toISOString(),
+    "2026-07-27T12:45:00.000Z",
+  );
+});
+
+test("computeNextSlot uses Intl timezone conversion across DST", () => {
+  const cadence = {
+    slotsPerDay: 1,
+    anchorHour: 9,
+    slotTimes: ["09:00"],
+    lastScheduledAt: null,
+  };
+
+  assert.equal(
+    computeNextSlot(
+      cadence,
+      date("2026-03-07T13:30:00.000Z"),
+      "America/New_York",
+    ).toISOString(),
+    "2026-03-07T14:00:00.000Z",
+  );
+  assert.equal(
+    computeNextSlot(
+      cadence,
+      date("2026-03-08T12:30:00.000Z"),
+      "America/New_York",
+    ).toISOString(),
+    "2026-03-08T13:00:00.000Z",
+  );
+});
+
 test("computeNextSlot validates explicit slot time shape", () => {
   const invalidCadence = {
     slotsPerDay: 2,
@@ -207,7 +259,7 @@ test("computeNextSlot validates explicit slot time shape", () => {
   );
 });
 
-test("computeNextSlot uses even UTC spacing from the schedule anchor as fallback", () => {
+test("computeNextSlot uses UTC for legacy cadence when no timezone is set", () => {
   assert.equal(
     computeNextSlot(
       { slotsPerDay: 4, lastScheduledAt: null },
@@ -275,6 +327,17 @@ test("computeNextSlot uses even UTC spacing from the schedule anchor as fallback
         date("2026-07-27T08:00:00.000Z"),
       ),
     /anchorHour/,
+  );
+});
+
+test("computeNextSlot treats legacy anchor hours as creator-local fallback", () => {
+  assert.equal(
+    computeNextSlot(
+      { slotsPerDay: 2, anchorHour: 9, lastScheduledAt: null },
+      date("2026-07-27T01:00:00.000Z"),
+      "Asia/Bangkok",
+    ).toISOString(),
+    "2026-07-27T02:00:00.000Z",
   );
 });
 

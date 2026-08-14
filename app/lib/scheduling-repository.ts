@@ -1,4 +1,4 @@
-import type { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 
 import { prisma } from "./db";
 import {
@@ -6,6 +6,12 @@ import {
   assertClipReadyToPost,
   readyToPostClipWhere,
 } from "./readiness";
+import {
+  DEFAULT_SCHEDULE_SETTINGS,
+  buildSlotLabels,
+  scheduleSettingsFromRow,
+  type ScheduleSettings,
+} from "./schedule-settings";
 import {
   assertClipStatusTransition,
   computeNextSlot,
@@ -34,17 +40,11 @@ export type ScheduleTickResult =
       reason: "no_accepted_clips";
     };
 
-export type SchedulePassResult =
-  | {
-      status: "done";
-      creatorId: string;
-      scheduled: Extract<ScheduleTickResult, { status: "scheduled" }>[];
-    }
-  | {
-      status: "no_schedule";
-      creatorId: string;
-      scheduled: [];
-    };
+export type SchedulePassResult = {
+  status: "done";
+  creatorId: string;
+  scheduled: Extract<ScheduleTickResult, { status: "scheduled" }>[];
+};
 
 export type MarkPostedResult = {
   status: "posted";
@@ -75,6 +75,11 @@ export async function scheduleTick(
         slotTimes: true,
         lastScheduledAt: true,
         rotation: true,
+        creator: {
+          select: {
+            timezone: true,
+          },
+        },
       },
     });
 
@@ -165,7 +170,11 @@ export async function scheduleTick(
       );
     }
 
-    const scheduledFor = computeNextSlot(schedule, now);
+    const scheduledFor = computeNextSlot(
+      schedule,
+      now,
+      schedule.creator.timezone,
+    );
     const updateResult = await tx.clip.updateMany({
       where: {
         id: selectedClip.id,
@@ -214,22 +223,7 @@ export async function runSchedulePass(
   assertValidDate(now, "now");
 
   const db = options.prismaClient ?? prisma;
-  const schedule = await db.schedule.findUnique({
-    where: {
-      creatorId,
-    },
-    select: {
-      id: true,
-    },
-  });
-
-  if (!schedule) {
-    return {
-      status: "no_schedule",
-      creatorId,
-      scheduled: [],
-    };
-  }
+  await ensureScheduleForCreator(creatorId, options);
 
   const acceptedClipCount = await db.clip.count({
     where: {
@@ -254,6 +248,59 @@ export async function runSchedulePass(
     creatorId,
     scheduled,
   };
+}
+
+export async function ensureScheduleForCreator(
+  creatorId: string,
+  options: SchedulingRepositoryOptions = {},
+): Promise<ScheduleSettings> {
+  const db = options.prismaClient ?? prisma;
+  const existing = await db.schedule.findUnique({
+    where: {
+      creatorId,
+    },
+    select: scheduleSettingsSelect,
+  });
+  if (existing) {
+    const settings = scheduleSettingsFromRow(existing);
+    if (!settings) {
+      throw new Error(`Creator ${creatorId} has an invalid schedule.`);
+    }
+    return settings;
+  }
+
+  try {
+    const created = await db.schedule.create({
+      data: {
+        creatorId,
+        slots: buildSlotLabels(DEFAULT_SCHEDULE_SETTINGS),
+        rotation: {},
+        ...scheduleSettingsWriteData(DEFAULT_SCHEDULE_SETTINGS),
+      },
+      select: scheduleSettingsSelect,
+    });
+    const settings = scheduleSettingsFromRow(created);
+    if (!settings) {
+      throw new Error(`Creator ${creatorId} has an invalid schedule.`);
+    }
+    return settings;
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) {
+      throw error;
+    }
+
+    const createdByRace = await db.schedule.findUniqueOrThrow({
+      where: {
+        creatorId,
+      },
+      select: scheduleSettingsSelect,
+    });
+    const settings = scheduleSettingsFromRow(createdByRace);
+    if (!settings) {
+      throw new Error(`Creator ${creatorId} has an invalid schedule.`);
+    }
+    return settings;
+  }
 }
 
 export async function markPosted(
@@ -438,6 +485,40 @@ function isJsonObject(
   value: Prisma.JsonValue,
 ): value is Record<string, Prisma.JsonValue> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+const scheduleSettingsSelect = {
+  slotsPerDay: true,
+  anchorHour: true,
+  slotTimes: true,
+  reviewReminders: true,
+  runwayWarnings: true,
+  runwayThresholdDays: true,
+  postTimeNudges: true,
+  pushNudges: true,
+} as const;
+
+function scheduleSettingsWriteData(settings: ScheduleSettings) {
+  return {
+    slotsPerDay: settings.slotsPerDay,
+    anchorHour: settings.anchorHour,
+    slotTimes: settings.slotTimes ?? Prisma.DbNull,
+    reviewReminders: settings.reviewReminders,
+    runwayWarnings: settings.runwayWarnings,
+    runwayThresholdDays: settings.runwayThresholdDays,
+    postTimeNudges: settings.postTimeNudges,
+    pushNudges: settings.pushNudges,
+  };
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    !Array.isArray(error) &&
+    "code" in error &&
+    error.code === "P2002"
+  );
 }
 
 function assertValidDate(value: Date, label: string): void {

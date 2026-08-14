@@ -21,6 +21,7 @@ import { subscribeToPushNudges } from "./push-client";
 
 type RhythmControlsProps = {
   initialSettings: ScheduleSettings;
+  initialTimezone: string;
   highlightPushNudges?: boolean;
 };
 
@@ -28,10 +29,14 @@ type SaveState = "idle" | "saving" | "saved" | "error";
 
 export function RhythmControls({
   initialSettings,
+  initialTimezone,
   highlightPushNudges = false,
 }: RhythmControlsProps) {
   const router = useRouter();
   const [settings, setSettings] = useState(initialSettings);
+  const [timezone, setTimezone] = useState(initialTimezone);
+  const [timezoneDraft, setTimezoneDraft] = useState(initialTimezone);
+  const [editingTimezone, setEditingTimezone] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [editingSlotIndex, setEditingSlotIndex] = useState<number | null>(null);
   const saveToken = useRef(0);
@@ -45,7 +50,11 @@ export function RhythmControls({
     void persist(next, previous);
   }
 
-  async function persist(next: ScheduleSettings, previous: ScheduleSettings) {
+  async function persist(
+    next: ScheduleSettings,
+    previous: ScheduleSettings,
+    timezoneUpdate?: string,
+  ): Promise<boolean> {
     const token = saveToken.current + 1;
     saveToken.current = token;
     clearSavedTimer();
@@ -59,7 +68,12 @@ export function RhythmControls({
         },
         body: JSON.stringify({
           ...next,
-          timezone: resolvedCreatorTimezone(),
+          ...(timezoneUpdate
+            ? {
+                timezone: timezoneUpdate,
+                timezoneConfirmed: true,
+              }
+            : {}),
         }),
       });
 
@@ -67,12 +81,19 @@ export function RhythmControls({
         throw new Error("Schedule save failed.");
       }
 
-      const body = (await response.json()) as { schedule: ScheduleSettings };
+      const body = (await response.json()) as {
+        schedule: ScheduleSettings;
+        timezone?: string;
+      };
       if (saveToken.current !== token) {
-        return;
+        return false;
       }
 
       setSettings(body.schedule);
+      if (body.timezone) {
+        setTimezone(body.timezone);
+        setTimezoneDraft(body.timezone);
+      }
       setSaveState("saved");
       router.refresh();
       clearTimer.current = window.setTimeout(() => {
@@ -80,13 +101,15 @@ export function RhythmControls({
           setSaveState("idle");
         }
       }, 1800);
+      return true;
     } catch (error) {
       if (saveToken.current !== token) {
-        return;
+        return false;
       }
 
       setSettings(previous);
       setSaveState("error");
+      return false;
     }
   }
 
@@ -165,6 +188,34 @@ export function RhythmControls({
     updateSettings((current) => settingsWithSlotTimes(current, sorted));
   }
 
+  async function saveTimezone() {
+    const nextTimezone = timezoneDraft.trim();
+    if (!nextTimezone || nextTimezone === timezone) {
+      setTimezoneDraft(timezone);
+      setEditingTimezone(false);
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Change timezone to ${nextTimezone}? Future slots will use this timezone. Posted clips stay unchanged.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    const saved = await persist(settings, settings, nextTimezone);
+    if (saved) {
+      setEditingTimezone(false);
+    }
+  }
+
+  function useDeviceTimezone() {
+    const detectedTimezone = resolvedCreatorTimezone();
+    if (detectedTimezone) {
+      setTimezoneDraft(detectedTimezone);
+    }
+  }
+
   return (
     <>
       <section className={styles.card} aria-labelledby="cadence-title">
@@ -177,6 +228,34 @@ export function RhythmControls({
         <p className={styles.preview} data-testid="cadence-preview">
           {cadenceSentence(settings)}
         </p>
+        <div className={styles.timezoneRow}>
+          <span>Timezone</span>
+          <strong>{timezone}</strong>
+          <button
+            onClick={() => {
+              setTimezoneDraft(timezone);
+              setEditingTimezone((current) => !current);
+            }}
+            type="button"
+          >
+            {editingTimezone ? "Close" : "Change"}
+          </button>
+        </div>
+        {editingTimezone ? (
+          <div className={styles.timezoneEditor}>
+            <input
+              aria-label="Creator timezone"
+              onChange={(event) => setTimezoneDraft(event.target.value)}
+              value={timezoneDraft}
+            />
+            <button onClick={useDeviceTimezone} type="button">
+              Use this device
+            </button>
+            <button onClick={() => void saveTimezone()} type="button">
+              Save timezone
+            </button>
+          </div>
+        ) : null}
         <div className={styles.slotList} data-testid="slot-list">
           {slotTimes.map((slotTime, index) => (
             <SlotTimeRow

@@ -1,7 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 
 import { prisma } from "./db";
-import { startOfUtcWeek } from "./posted-win";
+import { startOfCreatorLocalWeekUtc } from "./timezone";
 
 type PostingStatsOptions = {
   prismaClient?: PrismaClient;
@@ -15,12 +15,21 @@ export async function countPostedThisWeek(
   assertValidDate(now, "now");
 
   const db = options.prismaClient ?? prisma;
+  const creator = await db.creator.findUniqueOrThrow({
+    where: {
+      id: creatorId,
+    },
+    select: {
+      timezone: true,
+    },
+  });
+
   return db.clip.count({
     where: {
       creatorId,
       status: "posted",
       postedAt: {
-        gte: startOfUtcWeek(now),
+        gte: startOfCreatorLocalWeekUtc(now, creator.timezone),
         lte: now,
       },
     },
