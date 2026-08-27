@@ -62,7 +62,7 @@ export function InstallPrompt({ placement }: InstallPromptProps) {
       setPlatformState("installed");
     };
 
-    setPlatformState(detectCurrentState(false));
+    setPlatformState(detectCurrentState(Boolean(deferredPrompt)));
     window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
     window.addEventListener("appinstalled", handleAppInstalled);
     standaloneQuery.addEventListener("change", refreshInstalledState);
