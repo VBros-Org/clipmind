@@ -481,13 +481,15 @@ function parseTranscriptWord(value: unknown) {
   if (typeof word !== "string") {
     throw new Error("Clip service candidate word must be a string.");
   }
-  if (endMs <= startMs) {
+  if (endMs < startMs) {
     throw new Error(`Invalid clip candidate word window ${startMs}-${endMs}.`);
   }
 
   return {
     start_ms: startMs,
-    end_ms: endMs,
+    // Whisper occasionally emits zero-duration words; widen by 1ms rather
+    // than failing the whole video on one word.
+    end_ms: endMs === startMs ? startMs + 1 : endMs,
     word,
   };
 }
