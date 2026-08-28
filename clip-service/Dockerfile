@@ -13,6 +13,7 @@ RUN apt-get update \
         ffmpeg \
         fontconfig \
         fonts-dejavu-core \
+        fonts-thai-tlwg \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
