@@ -7,6 +7,8 @@ Team: VBros (George, Mos, Felix).
 ## Read first
 - Working rules for every agent: [`AGENTS.md`](AGENTS.md)
 - Full design and build plan: [`docs/build-plan.md`](docs/build-plan.md)
+- Team working notes (platform findings, roadmap): [`docs/notes.md`](docs/notes.md)
+- Minds integration evidence log: [`docs/minds-usage.md`](docs/minds-usage.md)
 
 ## Architecture in one line
 The deterministic backend is the boss. The Minds agent is a headless cognitive service the backend calls for voice, captions, and clip ranking. It never owns control flow.
