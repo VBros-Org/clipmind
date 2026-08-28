@@ -74,6 +74,18 @@ the way.
 - Light trim and caption preset editing in Review. Was on the build plan, cut
   to hold the jam deadline.
 
+## Known limits (found by using it on real content)
+
+- Code-switched speech (George streams in blended Thai/English) is Whisper's
+  weak spot: it locks onto one language per pass, so mixed speech comes out
+  forced into a single script with errors where it guessed wrong. Burned
+  subtitles inherit that. The fix is per-segment language detection or a
+  stronger transcription model with forced alignment for word timing; on the
+  Sprint 4 list, not patchable in a day.
+- Uploads whose mp4 index sits at the end of the file (common from some
+  recorders) played badly in previews until we remuxed. Server-side faststart
+  normalization on ingest is the durable fix; also Sprint 4.
+
 ## Ops notes
 
 - Whisper whole-file transcription caps out around 30-35 minutes of audio.
