@@ -2,6 +2,14 @@
 
 Running team notes. Not polished, kept honest. Roughly newest first.
 
+## Origin
+
+- ClipMind is the second generation of a pipeline George already runs daily:
+  the personal version cuts his stream VODs into shorts and hands him each
+  finished clip plus caption in Telegram, and he has posted from it
+  consistently since November. ClipMind replaces the bespoke one-person parts
+  with a Mind that can learn any creator's voice and taste.
+
 ## Platform notes (Minds)
 
 - Mind replies take minutes, not seconds. This forced the async design early:
