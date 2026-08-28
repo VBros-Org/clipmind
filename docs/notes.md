@@ -4,11 +4,31 @@ Running team notes. Not polished, kept honest. Roughly newest first.
 
 ## Origin
 
-- ClipMind is the second generation of a pipeline George already runs daily:
-  the personal version cuts his stream VODs into shorts and hands him each
-  finished clip plus caption in Telegram, and he has posted from it
-  consistently since November. ClipMind replaces the bespoke one-person parts
-  with a Mind that can learn any creator's voice and taste.
+- ClipMind is the latest generation of a clipping lineage George has been
+  building for himself. It started as Clip Helper, went through several
+  rebuilds, and became the stream pipeline he posts from today: finished clip
+  plus caption delivered to Telegram, posting consistent since November.
+  Depending on how you count, ClipMind is generation four or five, and it is
+  the first one built for creators other than George. It replaces the bespoke
+  one-person parts with a Mind that can learn any creator's voice and taste.
+
+## Why no auto-posting
+
+Earlier generations tried automated posting. What they taught us:
+
+- Nothing should go out that a human never looked at. Silent posting failures
+  are the most painful bug class in this category; you find out days later
+  that nothing shipped.
+- Platforms are actively suspicious of automated posting, the detection
+  changes under you, and puppeteering a creator's own account is a good way to
+  get it flagged.
+- When a service posts on your behalf, you usually cannot see which API route
+  it uses. A cheap third-party posting API can quietly damage an account's
+  standing.
+
+So the human tap is the trust feature, not a missing feature. ClipMind gets
+the creator to the moment of posting with everything ready, then stays out of
+the way.
 
 ## Platform notes (Minds)
 
