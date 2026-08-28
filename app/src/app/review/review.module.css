@@ -411,8 +411,8 @@
 
 .playerWrap {
   display: grid;
-  min-height: calc(var(--cm-space-6) * 5);
-  place-items: center;
+  grid-template-rows: minmax(0, 1fr) auto;
+  height: min(56dvh, 560px);
   overflow: hidden;
   border-radius: var(--cm-radius-card);
   background: var(--cm-bg-deep);
@@ -421,15 +421,13 @@
 .player {
   display: block;
   width: 100%;
-  max-height: calc(100dvh - var(--cm-bottom-nav-height) - var(--cm-space-6));
+  height: 100%;
+  min-height: 0;
   background: var(--cm-bg-deep);
 }
 
 .previewPlayer,
 .renderedPlayer {
-  width: auto;
-  max-width: 100%;
-  margin-inline: auto;
   object-fit: contain;
 }
 
